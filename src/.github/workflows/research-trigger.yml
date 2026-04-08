@@ -1,0 +1,35 @@
+name: Research Trigger (agentic-flow)
+# FALLBACK ONLY: The primary path for triggering research is triage.md, which
+# dispatches research directly via dispatch-workflow safe-output after applying
+# needs-spec. This workflow handles the case where needs-spec is added manually
+# (e.g., by a human or via /retry-triage), since GITHUB_TOKEN-triggered label
+# events are suppressed for downstream workflow runs.
+# This workflow does not consume project config values from agentic-flow.yml.
+# No config-parsing step is needed here.
+on:
+  issues:
+    types: [labeled]
+jobs:
+  dispatch:
+    if: github.event.label.name == 'needs-spec'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      issues: read  # read-only: this workflow only dispatches; research.md manages label state
+    steps:
+      # Note: research-in-progress label is applied by research.md at the START of its agent body,
+      # NOT here. This prevents the label getting stuck if dispatch fails.
+      - name: Dispatch research agent
+        uses: actions/github-script@v8
+        with:
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'research.lock.yml',
+              ref: 'main',
+              inputs: {
+                issue_number: String(context.payload.issue.number),
+                issue_node_id: context.payload.issue.node_id
+              }
+            });

@@ -1,0 +1,13 @@
+# OS artefacts
+.DS_Store
+Thumbs.db
+
+# Editor artefacts
+*.swp
+*.tmp
+.idea/
+.vscode/
+
+# Test probe files
+_test-trigger-*.md
+*.lock.yml

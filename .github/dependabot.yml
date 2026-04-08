@@ -1,0 +1,18 @@
+version: 2
+updates:
+  # Dev workflows in root .github/workflows/ (e.g. release.yml)
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    labels:
+      - dependencies
+
+  # Distributed pipeline workflows in src/.github/workflows/
+  # Dependabot scans {directory}/.github/workflows/, so /src covers src/.github/workflows/
+  - package-ecosystem: github-actions
+    directory: /src
+    schedule:
+      interval: weekly
+    labels:
+      - dependencies

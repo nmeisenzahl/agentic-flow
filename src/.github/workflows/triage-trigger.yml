@@ -1,0 +1,29 @@
+name: Triage Trigger (agentic-flow)
+# Dispatches triage.lock.yml when a new issue is opened.
+# The issues: opened trigger cannot coexist with slash_command in a single .md file,
+# so this standard GHA workflow handles the event and dispatches the agent via
+# workflow_dispatch — the same pattern used by research-trigger.yml.
+on:
+  issues:
+    types: [opened]
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      issues: read
+    steps:
+      - name: Dispatch triage agent
+        uses: actions/github-script@v8
+        with:
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'triage.lock.yml',
+              ref: 'main',
+              inputs: {
+                issue_number: String(context.payload.issue.number),
+                issue_node_id: context.payload.issue.node_id
+              }
+            });
