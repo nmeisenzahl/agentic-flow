@@ -38,7 +38,7 @@ Create the following labels before first use:
 | `research-in-progress` | `#f9d0c4` | Research agent is running |
 | `research-complete` | `#0e8a16` | Research findings appended; ready for spec |
 | `spec-in-progress` | `#d93f0b` | Spec is being authored |
-| `ready-to-merge` | `#0e8a16` | All spec artifacts approved |
+| `ready-to-merge` | `#0e8a16` | Applied automatically by `agentic-flow-tasks` when analyze + checklist pass — merge the PR when ready |
 
 ---
 
@@ -57,7 +57,7 @@ Copilot agents in this framework require the following MCP servers configured in
 
 #### GitHub MCP Server
 
-Required by: `agentic-flow-spec`, `agentic-flow-plan`, `agentic-flow-tasks`, `research.md`, and `post-merge.yml`
+Required by: `agentic-flow-spec`, `agentic-flow-plan`, `agentic-flow-tasks`, `research.md`, and `post-merge.md`
 
 ```json
 {
@@ -91,7 +91,7 @@ Used for: listing issues, reading PRs, creating issues, adding sub-issues, posti
 
 #### Microsoft Docs MCP Server (optional)
 
-Required by: `feature-researcher` (for technology reference lookups)
+Required by: the agentic-flow research agent (`research.md`) for technology reference lookups
 
 ```json
 {
@@ -140,7 +140,7 @@ The `GITHUB_TOKEN` used by workflows needs the following scopes at runtime (set 
 1. Go to **Settings → Developer settings → Personal access tokens → Fine-grained tokens**
 2. Click **Generate new token**
 3. Scope the token to this repository
-4. The account must have Copilot access; no additional permissions beyond defaults are required
+4. The account must have Copilot access; no repository permissions are required for this token (it is used only to call the Copilot API, not to read or write repository contents)
 
 **Add to repository**:
 

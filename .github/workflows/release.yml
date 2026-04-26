@@ -30,11 +30,13 @@ jobs:
             "src/.github/workflows/plan.md" \
             "src/.github/workflows/tasks.md" \
             "src/.github/workflows/refine.md" \
+            "src/.github/actions/assign-pr-agent/action.yml" \
             "src/.github/agents/agentic-flow-spec.agent.md" \
             "src/.github/agents/agentic-flow-plan.agent.md" \
             "src/.github/agents/agentic-flow-tasks.agent.md" \
             "src/.github/workflows/triage-trigger.yml" \
-            "src/.github/workflows/post-merge.yml" \
+            "src/.github/workflows/post-merge-trigger.yml" \
+            "src/.github/workflows/post-merge.md" \
             "src/.github/workflows/research-trigger.yml"; do
             [ -f "$f" ] || { echo "MISSING: $f"; exit 1; }
           done
@@ -42,12 +44,6 @@ jobs:
           # Validate docs/ (only files shipped in the release zip)
           for f in "docs/README.md" "docs/init.md" "docs/usage.md"; do
             [ -f "$f" ] || { echo "MISSING: $f"; exit 1; }
-          done
-
-          # Ensure forbidden files are absent
-          forbidden=(".github/copilot-instructions.md")
-          for f in "${forbidden[@]}"; do
-            [ ! -f "$f" ] || { echo "FORBIDDEN FILE EXISTS: $f"; exit 1; }
           done
 
       - name: Validate shipped workflow sources compile
@@ -60,7 +56,8 @@ jobs:
           VERSION="${GITHUB_REF_NAME}"
           # Package src/ contents — users extract this at their repo root (src/ prefix is stripped)
           # or run: cp -r src/. /target-repo/
-          cd src && zip -r "../agentic-flow-${VERSION}.zip" . && cd ..
+          # Exclude .lock.yml files — users compile their own after installation
+          cd src && zip -r "../agentic-flow-${VERSION}.zip" . --exclude "*.lock.yml" && cd ..
           # Append adopter docs — only README.md, init.md, usage.md ship in the zip
           # docs/contributing.md is dev-only and excluded
           zip -r "agentic-flow-${VERSION}.zip" \

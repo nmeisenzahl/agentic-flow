@@ -1,0 +1,127 @@
+name: Post-Merge Trigger (agentic-flow)
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - main
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: post-merge-trigger-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  trigger-post-merge:
+    if: github.event.pull_request.merged == true && contains(github.event.pull_request.labels.*.name, 'ready-to-merge')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      actions: write
+    steps:
+      - name: Extract feature context from PR comments
+        id: context
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Paginate through all PR comments to find the most recent trusted agentic-flow-context block
+          page=1
+          FEATURE_ISSUE=""
+          SPEC_DIR=""
+
+          while true; do
+            BATCH=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments?per_page=100&page=$page&direction=desc" 2>/dev/null)
+            COUNT=$(echo "$BATCH" | python3 -c "import json,sys; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "0")
+            if [ "$COUNT" = "0" ]; then break; fi
+
+            RESULT=$(BATCH_JSON="$BATCH" python3 - <<'PY'
+          import json, sys, os, re
+
+          comments = json.loads(os.environ["BATCH_JSON"])
+          trusted = {"copilot", "copilot[bot]", "copilot-swe-agent", "copilot-swe-agent[bot]"}
+
+          # Layer 1: trusted Copilot comment with Phase: tasks (comments already newest-first)
+          for comment in comments:
+              login = ((comment.get("user") or {}).get("login") or "").lower()
+              if login not in trusted:
+                  continue
+              body = comment.get("body") or ""
+              if "<!-- agentic-flow-context" not in body:
+                  continue
+              feature = re.search(r"Feature issue:\s*#?(\d+)", body)
+              spec_dir = re.search(r"Spec directory:\s*(specs/[^\s]+)", body)
+              phase = re.search(r"Phase:\s*tasks", body)
+              if feature and spec_dir and phase:
+                  print(f"issue_number={feature.group(1)}")
+                  print(f"spec_dir={spec_dir.group(1)}")
+                  sys.exit(0)
+
+          # Layer 2: tasks agent startup comment (comments already newest-first)
+          for comment in comments:
+              body = comment.get("body") or ""
+              if "<!-- agentic-flow-context" not in body:
+                  continue
+              if "## Tasks Agent" not in body and "Tasks Agent —" not in body:
+                  continue
+              feature = re.search(r"Feature issue:\s*#?(\d+)", body)
+              spec_dir = re.search(r"Spec directory:\s*(specs/[^\s]+)", body)
+              phase = re.search(r"Phase:\s*tasks", body)
+              if feature and spec_dir and phase:
+                  print(f"issue_number={feature.group(1)}")
+                  print(f"spec_dir={spec_dir.group(1)}")
+                  sys.exit(0)
+          PY
+          )
+
+            if echo "$RESULT" | grep -q "issue_number="; then
+              FEATURE_ISSUE=$(echo "$RESULT" | grep "issue_number=" | cut -d= -f2)
+              SPEC_DIR=$(echo "$RESULT" | grep "spec_dir=" | cut -d= -f2)
+              break
+            fi
+
+            page=$((page + 1))
+          done
+
+          if [ -z "$FEATURE_ISSUE" ] || [ -z "$SPEC_DIR" ]; then
+            echo "::error::Could not find a trusted agentic-flow-context block with Phase: tasks in PR #$PR_NUMBER comments. Ensure the tasks agent posted its handoff comment (Phase: tasks) before merging."
+            exit 1
+          fi
+
+          echo "feature_issue_number=$FEATURE_ISSUE" >> "$GITHUB_OUTPUT"
+          echo "spec_directory=$SPEC_DIR" >> "$GITHUB_OUTPUT"
+
+      - name: Ensure agentic-flow-task label exists
+        uses: actions/github-script@v8
+        with:
+          script: |
+            try {
+              await github.rest.issues.createLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: 'agentic-flow-task',
+                description: 'Task issue created by agentic-flow post-merge workflow',
+                color: '0075ca'
+              });
+            } catch (e) {
+              if (e.status !== 422) throw e; // 422 = already exists
+            }
+
+      - name: Dispatch post-merge AW
+        uses: actions/github-script@v8
+        with:
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'post-merge.lock.yml',
+              ref: 'main',
+              inputs: {
+                feature_issue_number: '${{ steps.context.outputs.feature_issue_number }}',
+                spec_directory: '${{ steps.context.outputs.spec_directory }}',
+                pr_number: String(${{ github.event.pull_request.number }})
+              }
+            });

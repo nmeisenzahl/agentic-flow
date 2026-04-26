@@ -6,13 +6,13 @@ This file defines **framework-wide invariants only**. Do not use it for phase-sp
 
 | Stage | Trigger | Dispatcher | Result |
 |-------|---------|------------|--------|
-| Triage | Issue opened / `/retry-triage` | `triage.md` | Formatted Feature issue + labels |
-| Research | `needs-spec` label | `research.md` | Research findings added to the Feature Issue |
+| Triage | Issue opened / `/retry-triage` (slash command) | `triage-trigger.yml` → `triage.md` / `triage.md` | Formatted Feature issue + labels |
+| Research | `needs-spec` label | `research-trigger.yml` → `research.md` | Research findings added to the Feature Issue |
 | Spec | `/start-spec` on Feature Issue | `spec.md` → `agentic-flow-spec` | Spec-stage files on the spec PR branch |
 | Refine | `/refine-spec` on spec PR | `refine.md` → `agentic-flow-spec` | Updated spec-stage files on the same branch |
 | Plan | `/approve-spec` on spec PR | `plan.md` → `agentic-flow-plan` | Plan-stage files on the same branch |
 | Tasks | `/approve-plan` on spec PR | `tasks.md` → `agentic-flow-tasks` | Tasks-stage files on the same branch |
-| Post-merge | Spec PR merged | `post-merge.yml` | Task sub-issues created |
+| Post-merge | Spec PR merged | `post-merge-trigger.yml` → `post-merge.md` | Task sub-issues created |
 
 ## Framework Rules
 
@@ -33,7 +33,7 @@ This file defines **framework-wide invariants only**. Do not use it for phase-sp
 | `needs-refinement` | Feature Issue lacks enough detail for spec |
 | `research-in-progress` / `research-complete` | Research status |
 | `spec-in-progress` | Spec PR exists and the spec pipeline is active |
-| `ready-to-merge` | Spec, plan, and tasks passed and the PR can be merged |
+| `ready-to-merge` | `agentic-flow-tasks` applies this when analyze + checklist both pass — merge the PR when ready |
 
 ## Wrapper Ownership
 

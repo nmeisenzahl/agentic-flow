@@ -19,6 +19,7 @@ permissions:
   pull-requests: read
 
 safe-outputs:
+  report-failure-as-issue: false
   update-issue:
     target: "*"
     body:
@@ -33,6 +34,10 @@ safe-outputs:
 concurrency:
   group: triage-issue-${{ github.event.inputs.issue_number || github.event.issue.number }}
   cancel-in-progress: false
+
+network:
+  allowed:
+    - defaults
 
 env:
   COPILOT_MODEL: claude-sonnet-4-6
@@ -110,11 +115,11 @@ Apply either `needs-spec` or `needs-refinement` to the issue based on your class
 
 If you applied `needs-spec`, dispatch the research workflow using the `dispatch_workflow` tool:
 - `workflow`: `research`
-- `inputs`: `{ "issue_number": "{issue_number}", "issue_node_id": "{issue_node_id}" }`
+- `inputs`: `{ "issue_number": "<number of the issue being triaged>", "issue_node_id": "<node_id of that same issue>" }`
 
 ## Step 5 — Scope Check
 
-If the issue appears to span more than 3 user stories OR more than 15 implementation tasks, post a **non-blocking** comment recommending the issue be split into smaller features. Do NOT apply any ADDITIONAL label beyond the one applied in Step 6, and do NOT fail. This is advisory only.
+If the issue appears to span more than 3 user stories OR more than 15 implementation tasks, post a **non-blocking** comment recommending the issue be split into smaller features. Do NOT apply any ADDITIONAL label beyond the one applied in Step 4, and do NOT fail. This is advisory only.
 
 ## Error Handling
 

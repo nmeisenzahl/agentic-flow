@@ -7,8 +7,8 @@ on:
         description: 'Issue number to research'
         required: true
       issue_node_id:
-        description: 'Issue GraphQL node ID'
-        required: true
+        description: 'Issue GraphQL node ID (passed through from trigger for future use; not consumed by the agent body)'
+        required: false
 
 permissions:
   issues: read
@@ -16,6 +16,7 @@ permissions:
   pull-requests: read
 
 safe-outputs:
+  report-failure-as-issue: false
   update-issue:
     target: "*"
     body:
@@ -31,6 +32,10 @@ safe-outputs:
 concurrency:
   group: research-issue-${{ inputs.issue_number }}
   cancel-in-progress: false
+
+network:
+  allowed:
+    - defaults
 
 env:
   COPILOT_MODEL: claude-sonnet-4-6

@@ -142,7 +142,7 @@ Human blocking input is restricted to exactly these four interactions:
 
 Agents MUST NOT introduce additional blocking approval requests or wait-states
 outside these four gates. The `ready-to-merge` label is applied automatically
-by `speckit-driver` when `speckit.analyze` returns PASS on `tasks.md` — no
+by the `speckit.analyze` agent when `speckit.analyze` returns PASS on `tasks.md` — no
 `/approve-tasks` command exists in this architecture.
 
 **Rationale**: Preserves the "AI does the heavy lifting" contract. The tasks
@@ -214,10 +214,10 @@ No other blocking human interactions. No exceptions.
 
 | Agent | Responsibility |
 |-------|----------------|
-| `speckit-driver` | Runs the spec pipeline; handles slash commands |
-| `feature-researcher` | Domain research before spec begins |
-| `feature-implementer` | Implements task issues, opens code PRs |
-| `review-orchestrator` | Coordinates security, AC, architecture, coverage reviews |
+| `agentic-flow-spec` | Spec wrapper: generates and refines `spec.md` via speckit.specify, speckit.clarify |
+| `agentic-flow-plan` | Plan wrapper: generates `plan.md` via speckit.plan |
+| `agentic-flow-tasks` | Tasks wrapper: generates `tasks.md` via speckit.tasks, speckit.analyze, speckit.checklist |
+| `speckit.*` agents | Copilot CLI agents for spec, plan, tasks, clarify, analyze, checklist, implement, taskstoissues, constitution |
 
 ---
 

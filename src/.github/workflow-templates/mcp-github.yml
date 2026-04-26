@@ -1,8 +1,0 @@
-# Shared GitHub MCP server block — imported by all `.md` files.
-# Usage: add `imports: - src/.github/workflow-templates/mcp-github.yml` to your `.md` frontmatter.
-mcp-servers:
-  github:
-    type: http
-    url: https://api.githubcopilot.com/mcp/
-    headers:
-      Authorization: "Bearer ${{ github.token }}"

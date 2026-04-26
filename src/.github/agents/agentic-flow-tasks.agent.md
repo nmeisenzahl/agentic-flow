@@ -1,12 +1,12 @@
 ---
 description: "Maps speckit tasks generation onto the agentic-flow spec PR workflow without creating extra branches or PRs."
+model: claude-sonnet-4-6
 tools:
   - 'execute'
   - 'read'
   - 'edit'
   - 'search'
   - 'github/github-mcp-server/get_issue'
-  - 'github/github-mcp-server/search_pull_requests'
   - 'github/github-mcp-server/get_pull_request'
   - 'github/github-mcp-server/list_issue_comments'
   - 'github/github-mcp-server/create_pull_request_review'
@@ -83,8 +83,85 @@ Do **not** create or update implementation code, implementation PR artefacts, or
    - Checklist
 6. Commit and push the current branch with:
    - `feat(tasks): generate tasks.md for issue #N`
-7. If analyze and checklist both pass, apply the `ready-to-merge` label to the spec PR.
-8. Post a summary comment on the spec PR using `create_issue_comment`.
+
+> [!IMPORTANT]
+> **Committing is NOT the end of your task.** You MUST complete steps 7–9 and both Gates A and B before returning any reply. Skipping any of them silently breaks post-merge sub-issue creation.
+
+7. Post a summary comment on the spec PR using `create_issue_comment`. Include the `agentic-flow-context` block exactly as shown in the PR Summary Format below.
+
+8. If analyze and checklist both pass, apply the `ready-to-merge` label to the spec PR using `add_labels_to_issue`.
+
+   > [!IMPORTANT]
+   > **The `ready-to-merge` label is the trigger for post-merge sub-issue creation.** Without it the `post-merge-trigger` workflow will skip silently when the PR is merged. This step is mandatory on the pass path — do not skip it.
+
+   If the call fails or returns an error, post the following error comment and exit in **failure** state — do not return a successful reply:
+   ```markdown
+   ## ❌ Label Application Failed
+
+   The tasks agent could not apply the `ready-to-merge` label to this PR.
+
+   **Impact:** Do not merge this PR — merging without the label will silently skip sub-issue creation.
+
+   **Recovery:** Re-run `/approve-plan` on this PR to retry the tasks stage.
+
+   **Error:** {error message}
+
+   _agentic-flow tasks pipeline_
+   ```
+
+9. Run the **Completion Gate** below before returning any conversational reply to the reviewer.
+
+## Completion Gate
+
+Run both gates in order. Exit in failure state on any gate failure — do not return a successful reply.
+
+### Gate A — Context comment verified
+
+1. Call `list_issue_comments` on the spec PR number.
+2. Search the returned comments for one authored by a trusted Copilot login (`copilot`, `copilot[bot]`, `copilot-swe-agent`, `copilot-swe-agent[bot]`) whose body contains **all** of the following exact values for this run:
+   - `<!-- agentic-flow-context`
+   - `Phase: tasks`
+   - `Feature issue: #N` (the actual feature issue number)
+   - `Spec directory: {spec directory for this run}`
+3. If found: Gate passes.
+4. If not found: wait briefly (API propagation lag), then check once more.
+5. If still not found: post the summary comment again using `create_issue_comment`, then check one final time.
+6. If still not found after the retry: post the following error comment and exit in **failure** state — do not return a successful reply:
+   ```markdown
+   ## ❌ Handoff Failed — Context Comment Not Posted
+
+   The tasks agent completed its run but the mandatory `agentic-flow-context` handoff comment
+   could not be confirmed on this PR after multiple attempts.
+
+   **Impact:** Do not merge this PR — merging without the context comment will not trigger sub-issue creation.
+
+   **Recovery:** Re-run `/approve-plan` on this PR to retry the tasks stage and re-post the handoff comment.
+
+   _agentic-flow tasks pipeline_
+   ```
+7. When the gate passes, include the full `<!-- agentic-flow-context -->` block (exactly as posted in Step 7) in your conversational reply. HTML comments are invisible in rendered Markdown but machine-readable by downstream workflows — this ensures your reply serves as a backup handoff source.
+
+### Gate B — Label verified (pass path only)
+
+Skip this gate if the run ended on the ⚠️ path (outstanding findings remain after 2 auto-revision cycles).
+
+1. Call `get_pull_request` on the spec PR number.
+2. Check that `ready-to-merge` appears in the PR's labels list.
+3. If present: Gate passes.
+4. If missing: wait briefly (API propagation lag), then check once more.
+5. If still missing: retry `add_labels_to_issue` once, then check one final time.
+6. If still missing after the retry: post the following error comment and exit in **failure** state — do not return a successful reply:
+   ```markdown
+   ## ❌ Label Not Applied — Merge Blocked
+
+   The tasks agent completed its run but the `ready-to-merge` label could not be confirmed on this PR after multiple attempts.
+
+   **Impact:** Do not merge this PR — merging without the `ready-to-merge` label will silently skip sub-issue creation.
+
+   **Recovery:** Re-run `/approve-plan` on this PR to retry the tasks stage and re-apply the label.
+
+   _agentic-flow tasks pipeline_
+   ```
 
 ## PR Summary Format
 
@@ -108,7 +185,7 @@ Feature issue: #N
 | Checklist | ✓ |
 
 > [!IMPORTANT]
-> **Next step:** Review `tasks.md` in this PR. When satisfied, merge this PR to create the task sub-issues.
+> **For the human reviewer:** Review `tasks.md` in this PR. When satisfied, merge this PR to create the task sub-issues.
 ```
 
 ### If findings remain after auto-revision
@@ -137,7 +214,7 @@ Feature issue: #N
 > The tasks stage still has unresolved findings after 2 auto-revision cycles.
 
 > [!IMPORTANT]
-> **Next step:** Review the findings in this PR and update `tasks.md` (and any supporting tasks-stage artefacts) directly on the current branch. Merge the PR when satisfied.
+> **For the human reviewer:** Review the findings in this PR and update `tasks.md` (and any supporting tasks-stage artefacts) directly on the current branch. **Do not merge** — the `ready-to-merge` label has not been applied. Re-run `/approve-plan` after fixing the outstanding findings to apply the label and enable the merge.
 ```
 
 Include any supporting tasks-stage files you created or updated in the summary body.

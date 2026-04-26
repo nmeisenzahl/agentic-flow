@@ -1,5 +1,6 @@
 ---
 description: "Maps speckit spec generation onto the agentic-flow PR/sub-issue workflow without creating extra branches or PRs."
+model: claude-sonnet-4-6
 tools:
   - 'execute'
   - 'read'
@@ -53,13 +54,12 @@ The block provides:
 
 ### A. `Run mode: start`
 
-You were assigned to a spec tracking sub-issue titled `Spec/Plan/Tasks: ...`.
+You were assigned directly to the spec draft PR via the agentic-flow spec assignment workflow.
 
-- Read the sub-issue body and use the embedded `## Feature Issue Content` section as the feature source of truth.
-- GitHub already created and checked out the working branch for this sub-issue.
-- Do **not** create a new branch or PR.
+- Read the PR startup comment (the `<!-- agentic-flow-context -->` block) and use `Feature issue: #N` from it.
+- Read Feature Issue #N in full to use as the feature source of truth.
+- GitHub has already created the working branch for this PR. Do **not** create a new branch or PR.
 - Determine the spec directory using the speckit phase document. If it does not prescribe one, create/use `specs/{NNN}-{feature-title-kebab-case}` and treat `specs/{NNN}-{name}/spec.md` as the primary artefact.
-- Find the open PR for the current branch using `git branch --show-current` + open PR lookup.
 
 ### B. `Run mode: refine`
 
@@ -103,7 +103,78 @@ Do **not** create or update plan-stage files, tasks-stage files, application cod
 5. Commit and push the current branch.
    - Fresh spec: `feat(spec): generate spec.md for issue #N`
    - Refine: `feat(spec): refine spec.md for issue #N`
-6. Post a summary comment on the spec PR using `create_issue_comment`.
+
+> [!IMPORTANT]
+> **Committing is NOT the end of your task.** You MUST complete steps 6–8 and both Gates before returning any reply. Skipping any of them silently breaks the downstream pipeline.
+
+6. Update the PR description using `gh pr edit <number> --body "<body>"`. Use the **PR Description Format** below. This makes the next steps immediately visible to anyone who opens the PR. (`gh` CLI is used here because MCP does not expose a PR body update tool.)
+
+7. Post a summary comment on the spec PR using `create_issue_comment`. Include the `agentic-flow-context` block exactly as shown in the PR Summary Format below.
+
+8. Run the **Completion Gate** below before returning any conversational reply to the reviewer.
+
+## Completion Gate
+
+You must verify both handoff steps actually took effect before exiting successfully. These checks protect the downstream pipeline — skipping them silently breaks `/approve-spec` and `/refine-spec`.
+
+### Gate A — Context comment verified
+
+1. Call `list_issue_comments` on the spec PR number.
+2. Search the returned comments for one authored by a trusted Copilot login (`copilot`, `copilot[bot]`, `copilot-swe-agent`, `copilot-swe-agent[bot]`) whose body contains **all** of the following exact values for this run:
+   - `<!-- agentic-flow-context`
+   - `Phase: spec`
+   - `Feature issue: #N` (the actual feature issue number)
+   - `Spec directory: {spec directory for this run}`
+3. If found: Gate A passes. Continue to Gate B.
+4. If not found: wait briefly (API propagation lag), then check once more.
+5. If still not found: post the summary comment again using `create_issue_comment`, then check one final time.
+6. If still not found after the retry: post the following error comment and exit in **failure** state — do not return a successful reply:
+   ```markdown
+   ## ❌ Handoff Failed — Context Comment Not Posted
+
+   The spec agent completed its run but the mandatory `agentic-flow-context` handoff comment
+   could not be confirmed on this PR after multiple attempts.
+
+   **Impact:** `/approve-spec` and `/refine-spec` will fail until this comment is present.
+
+   **Recovery:** Re-run `/refine-spec` on this PR to retry the spec stage and re-post the handoff comment.
+
+   _agentic-flow spec pipeline_
+   ```
+7. When Gate A passes, include the full `<!-- agentic-flow-context -->` block (exactly as posted in Step 7) in your conversational reply. HTML comments are invisible in rendered Markdown but machine-readable by downstream workflows — this ensures your reply serves as a backup handoff source.
+
+### Gate B — PR description verified
+
+1. Call `get_pull_request` on the spec PR number to read its current description.
+2. Verify the body contains `👉 Next Steps`.
+3. If missing: re-run `gh pr edit <number> --body "<body>"` once (use the PR Description Format above).
+4. If still missing after the retry: post a warning comment noting the PR description update failed, then continue. This is non-fatal — the context comment (Gate A) is the machine-critical handoff; the PR description is human guidance only.
+
+## PR Description Format
+
+Set this as the PR body in step 6. Replace placeholders with real values.
+
+```markdown
+## Spec PR — Feature #N
+
+| Field | Value |
+| --- | --- |
+| Feature Issue | #N |
+| Spec directory | `specs/{NNN}-{name}` |
+| Primary artefact | `specs/{NNN}-{name}/spec.md` |
+
+---
+
+## 👉 Next Steps
+
+> [!IMPORTANT]
+> **Review `specs/{NNN}-{name}/spec.md`** in the Files tab, then:
+>
+> - Post **`/approve-spec`** as a comment on this PR to proceed to plan generation.
+> - Post **`/refine-spec`** as a comment on this PR to request another spec iteration.
+
+_Generated by agentic-flow spec pipeline — triggered by `/start-spec` on issue #N_
+```
 
 ## PR Summary Format
 
@@ -128,7 +199,7 @@ Run mode: {start|refine}
 | Analyze | ✓ |
 
 > [!IMPORTANT]
-> **Next step:** Review `spec.md` in this PR, then comment `/approve-spec` on this PR to proceed to plan generation. Use `/refine-spec` if you want another spec iteration first.
+> **For the human reviewer:** Review `spec.md` in this PR, then comment `/approve-spec` on this PR to proceed to plan generation. Use `/refine-spec` if you want another spec iteration first.
 ```
 
 ### If findings remain after auto-revision
@@ -158,7 +229,7 @@ Run mode: {start|refine}
 > The spec still has unresolved findings after 2 auto-revision cycles.
 
 > [!IMPORTANT]
-> **Next step:** Review the findings in this PR, address them, and then use `/refine-spec` or `/approve-spec` as appropriate.
+> **For the human reviewer:** Review the findings in this PR, address them, and then use `/refine-spec` or `/approve-spec` as appropriate.
 ```
 
 Include any supporting spec-stage files you created or updated in the summary body.

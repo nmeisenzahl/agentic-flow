@@ -10,12 +10,12 @@ agentic-flow automates specification and planning for every feature:
 2. **Research** — Enriches the issue with domain research and prior art
 3. **Spec** — Generates `spec.md` via the speckit quality gate chain
 4. **Plan** — Generates `plan.md` with architecture decisions
-5. **Tasks** — Generates `tasks.md` with dependency graph; applies `ready-to-merge`
+5. **Tasks** — Generates `tasks.md` with dependency graph
 6. **Post-merge** — Creates Task sub-issues linked to the Feature issue
 
 ## Getting Started
 
-1. Download `agentic-flow-v{version}.zip` from the [latest release](https://github.com/nicholasgasior/agentic-flow/releases/latest)
+1. Download `agentic-flow-v{version}.zip` from the [latest release](https://github.com/nmeisenzahl/agentic-flow/releases/latest)
 2. Extract into your repository root:
    ```bash
    unzip agentic-flow-v{version}.zip

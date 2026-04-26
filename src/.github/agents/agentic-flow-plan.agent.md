@@ -1,12 +1,12 @@
 ---
 description: "Maps speckit plan generation onto the agentic-flow spec PR workflow without creating extra branches or PRs."
+model: claude-sonnet-4-6
 tools:
   - 'execute'
   - 'read'
   - 'edit'
   - 'search'
   - 'github/github-mcp-server/get_issue'
-  - 'github/github-mcp-server/search_pull_requests'
   - 'github/github-mcp-server/get_pull_request'
   - 'github/github-mcp-server/list_issue_comments'
   - 'github/github-mcp-server/create_pull_request_review'
@@ -78,7 +78,43 @@ Do **not** create or update tasks-stage files, implementation code, or any new b
 5. Run the analyze feedback loop and auto-revise as needed.
 6. Commit and push the current branch with:
    - `feat(plan): generate plan.md for issue #N`
-7. Post a summary comment on the spec PR using `create_issue_comment`.
+
+> [!IMPORTANT]
+> **Committing is NOT the end of your task.** You MUST complete step 7 and Gate A before returning any reply. Skipping them silently breaks `/approve-plan`.
+
+7. Post a summary comment on the spec PR using `create_issue_comment`. Include the `agentic-flow-context` block exactly as shown in the PR Summary Format below.
+
+8. Run the **Completion Gate** below before returning any conversational reply to the reviewer.
+
+## Completion Gate
+
+You must verify the handoff comment actually took effect before exiting successfully. Skipping this check silently breaks `/approve-plan`.
+
+### Gate A — Context comment verified
+
+1. Call `list_issue_comments` on the spec PR number.
+2. Search the returned comments for one authored by a trusted Copilot login (`copilot`, `copilot[bot]`, `copilot-swe-agent`, `copilot-swe-agent[bot]`) whose body contains **all** of the following exact values for this run:
+   - `<!-- agentic-flow-context`
+   - `Phase: plan`
+   - `Feature issue: #N` (the actual feature issue number)
+   - `Spec directory: {spec directory for this run}`
+3. If found: Gate passes.
+4. If not found: wait briefly (API propagation lag), then check once more.
+5. If still not found: post the summary comment again using `create_issue_comment`, then check one final time.
+6. If still not found after the retry: post the following error comment and exit in **failure** state — do not return a successful reply:
+   ```markdown
+   ## ❌ Handoff Failed — Context Comment Not Posted
+
+   The plan agent completed its run but the mandatory `agentic-flow-context` handoff comment
+   could not be confirmed on this PR after multiple attempts.
+
+   **Impact:** `/approve-plan` will fail until this comment is present.
+
+   **Recovery:** Re-run `/approve-spec` on this PR to retry the plan stage and re-post the handoff comment.
+
+   _agentic-flow plan pipeline_
+   ```
+7. When the gate passes, include the full `<!-- agentic-flow-context -->` block (exactly as posted in Step 7) in your conversational reply. HTML comments are invisible in rendered Markdown but machine-readable by downstream workflows — this ensures your reply serves as a backup handoff source.
 
 ## PR Summary Format
 
@@ -101,7 +137,7 @@ Feature issue: #N
 | Analyze | ✓ |
 
 > [!IMPORTANT]
-> **Next step:** Review `plan.md` in this PR, then comment `/approve-plan` on this PR to proceed to tasks generation.
+> **For the human reviewer:** Review `plan.md` in this PR, then comment `/approve-plan` on this PR to proceed to tasks generation.
 ```
 
 ### If findings remain after auto-revision
@@ -129,7 +165,7 @@ Feature issue: #N
 > The plan still has unresolved findings after 2 auto-revision cycles.
 
 > [!IMPORTANT]
-> **Next step:** Review the findings in this PR and update `plan.md` (and any supporting plan-stage artefacts) directly on the current branch. If the spec itself must change first, use `/refine-spec`; otherwise use `/approve-plan` once the plan is ready for tasks generation.
+> **For the human reviewer:** Review the findings in this PR and update `plan.md` (and any supporting plan-stage artefacts) directly on the current branch. If the spec itself must change first, use `/refine-spec`; otherwise use `/approve-plan` once the plan is ready for tasks generation.
 ```
 
 Include any supporting plan-stage files you created or updated in the summary body.
