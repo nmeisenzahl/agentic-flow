@@ -8,6 +8,7 @@ on:
 permissions:
   contents: read
   issues: write
+  pull-requests: read
 
 concurrency:
   group: post-merge-trigger-${{ github.event.pull_request.number }}
@@ -20,6 +21,7 @@ jobs:
     permissions:
       contents: read
       issues: write
+      pull-requests: read
       actions: write
     steps:
       - name: Extract feature context from PR comments
@@ -34,8 +36,12 @@ jobs:
           SPEC_DIR=""
 
           while true; do
-            BATCH=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments?per_page=100&page=$page&direction=desc" 2>/dev/null)
+            BATCH=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments?per_page=100&page=$page" 2>&1) || {
+              echo "::warning::gh api call failed (page $page): $BATCH"
+              break
+            }
             COUNT=$(echo "$BATCH" | python3 -c "import json,sys; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "0")
+            echo "Page $page: $COUNT comments"
             if [ "$COUNT" = "0" ]; then break; fi
 
             RESULT=$(BATCH_JSON="$BATCH" python3 - <<'PY'
@@ -44,28 +50,13 @@ jobs:
           comments = json.loads(os.environ["BATCH_JSON"])
           trusted = {"copilot", "copilot[bot]", "copilot-swe-agent", "copilot-swe-agent[bot]"}
 
-          # Layer 1: trusted Copilot comment with Phase: tasks (comments already newest-first)
-          for comment in comments:
+          # Search all comments (newest first by reversing) for a trusted context block with Phase: tasks
+          for comment in reversed(comments):
               login = ((comment.get("user") or {}).get("login") or "").lower()
               if login not in trusted:
                   continue
               body = comment.get("body") or ""
               if "<!-- agentic-flow-context" not in body:
-                  continue
-              feature = re.search(r"Feature issue:\s*#?(\d+)", body)
-              spec_dir = re.search(r"Spec directory:\s*(specs/[^\s]+)", body)
-              phase = re.search(r"Phase:\s*tasks", body)
-              if feature and spec_dir and phase:
-                  print(f"issue_number={feature.group(1)}")
-                  print(f"spec_dir={spec_dir.group(1)}")
-                  sys.exit(0)
-
-          # Layer 2: tasks agent startup comment (comments already newest-first)
-          for comment in comments:
-              body = comment.get("body") or ""
-              if "<!-- agentic-flow-context" not in body:
-                  continue
-              if "## Tasks Agent" not in body and "Tasks Agent —" not in body:
                   continue
               feature = re.search(r"Feature issue:\s*#?(\d+)", body)
               spec_dir = re.search(r"Spec directory:\s*(specs/[^\s]+)", body)
@@ -94,20 +85,25 @@ jobs:
           echo "feature_issue_number=$FEATURE_ISSUE" >> "$GITHUB_OUTPUT"
           echo "spec_directory=$SPEC_DIR" >> "$GITHUB_OUTPUT"
 
-      - name: Ensure agentic-flow-task label exists
+      - name: Ensure pipeline labels exist
         uses: actions/github-script@v8
         with:
           script: |
-            try {
-              await github.rest.issues.createLabel({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                name: 'agentic-flow-task',
-                description: 'Task issue created by agentic-flow post-merge workflow',
-                color: '0075ca'
-              });
-            } catch (e) {
-              if (e.status !== 422) throw e; // 422 = already exists
+            const labels = [
+              { name: 'agentic-flow-task', description: 'Task issue created by agentic-flow post-merge workflow', color: '0075ca' },
+              { name: 'agentic-flow-audit', description: 'Audit/review task — verify or validate work from other tasks', color: 'e4e669' },
+              { name: 'tasks-created', description: 'All task sub-issues created — pipeline complete', color: '0e8a16' },
+            ];
+            for (const label of labels) {
+              try {
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  ...label,
+                });
+              } catch (e) {
+                if (e.status !== 422) throw e; // 422 = already exists
+              }
             }
 
       - name: Dispatch post-merge AW
@@ -122,6 +118,7 @@ jobs:
               inputs: {
                 feature_issue_number: '${{ steps.context.outputs.feature_issue_number }}',
                 spec_directory: '${{ steps.context.outputs.spec_directory }}',
-                pr_number: String(${{ github.event.pull_request.number }})
+                pr_number: String(${{ github.event.pull_request.number }}),
+                merge_commit_sha: '${{ github.event.pull_request.merge_commit_sha }}'
               }
             });

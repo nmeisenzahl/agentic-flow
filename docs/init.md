@@ -49,45 +49,23 @@ In **repository Settings → Copilot → Coding agent**:
 - **Enable coding agent** for this repository
 - **Allow agent to push to branches:** enabled (agents open PRs from spec branches)
 - **Allow agent to create issues:** enabled (for `/taskstoissues`)
-- **Firewall / allowed tools:** ensure `create_issue`, `add_sub_issue` are not blocked
+- **Firewall / allowed tools:** ensure `create_issue`, `add_sub_issue`, `create_or_update_file` are not blocked
 
 ### MCP Servers
 
-Copilot agents in this framework require the following MCP servers configured in the repository's Copilot settings (Settings → Copilot → MCP servers, or via `.github/copilot/mcp.json`):
+The agentic-flow wrapper agents define their MCP server configuration directly in their YAML frontmatter (`mcp-servers:` property). This means the MCP config ships as code — no manual UI configuration is needed.
 
-#### GitHub MCP Server
+Each agent declares only the tools it requires (least privilege):
 
-Required by: `agentic-flow-spec`, `agentic-flow-plan`, `agentic-flow-tasks`, `research.md`, and `post-merge.md`
+| Agent | Write tools | Label tools |
+|-------|------------|-------------|
+| `agentic-flow-spec` | `create_or_update_file`, `create_issue_comment`, `create_pull_request_review` | — |
+| `agentic-flow-plan` | `create_or_update_file`, `create_issue_comment`, `create_pull_request_review` | — |
+| `agentic-flow-tasks` | `create_or_update_file`, `create_issue_comment`, `create_pull_request_review` | `issue_write` |
 
-```json
-{
-  "mcpServers": {
-    "github": {
-      "type": "http",
-      "url": "https://api.githubcopilot.com/mcp/",
-      "headers": {
-        "Authorization": "Bearer ${GITHUB_TOKEN}"
-      },
-      "tools": [
-        "get_issue",
-        "list_issues",
-        "update_issue",
-        "create_issue",
-        "create_issue_comment",
-        "add_sub_issue",
-        "add_labels_to_labeled_item",
-        "get_pull_request",
-        "list_pull_requests",
-        "create_pull_request",
-        "create_or_update_file",
-        "create_pull_request_review"
-      ]
-    }
-  }
-}
-```
+All three agents connect to `https://api.githubcopilot.com/mcp/` using `COPILOT_MCP_GITHUB_WRITE_TOKEN` from the `copilot` environment (see §5b).
 
-Used for: listing issues, reading PRs, creating issues, adding sub-issues, posting comments.
+> **Important:** If you previously configured a GitHub MCP server in the repository UI (Settings → Copilot → Cloud agent), **remove it** after deploying these agents. Repo-level MCP config merges with agent-level config and would grant tools beyond each agent's least-privilege set.
 
 #### Microsoft Docs MCP Server (optional)
 
@@ -155,6 +133,8 @@ The `GITHUB_TOKEN` used by workflows needs the following scopes at runtime (set 
 
 `GH_AW_AGENT_TOKEN` is a fine-grained PAT required by the custom PR assignment workaround used in `plan.md`, `refine.md`, and `tasks.md`. Those workflows use it to reassign Copilot on the spec PR and post the startup `@copilot` comment that launches the wrapper agent. The `/start-spec` flow continues to use the built-in sub-issue assignment path. Without this secret, the PR-based wrapper handoff cannot launch.
 
+This same token is also used as the underlying PAT for `COPILOT_MCP_GITHUB_WRITE_TOKEN` (see §5b).
+
 **Create the token**:
 
 1. Go to **Settings → Developer settings → Personal access tokens → Fine-grained tokens**
@@ -168,6 +148,41 @@ The `GITHUB_TOKEN` used by workflows needs the following scopes at runtime (set 
 2. Click **New repository secret**
 3. Name: `GH_AW_AGENT_TOKEN`
 4. Value: the fine-grained PAT you just created
+
+---
+
+### 5b. Copilot Environment & Setup Steps
+
+The Copilot coding agent uses a special `copilot` Actions environment. Secrets and variables added to this environment are available to the agent runtime and MCP server configurations — including the `mcp-servers:` blocks defined in agent YAML frontmatter.
+
+#### Create the `copilot` environment
+
+1. Go to **Settings → Environments**
+2. Click **New environment**
+3. Name: `copilot`
+4. No deployment protection rules are needed
+
+#### Add environment secrets
+
+Add the following secret to the `copilot` environment:
+
+| Secret | Value | Purpose |
+|--------|-------|---------|
+| `COPILOT_MCP_GITHUB_WRITE_TOKEN` | Same PAT as `GH_AW_AGENT_TOKEN` | Referenced by each wrapper agent's `mcp-servers:` frontmatter for `create_or_update_file`, labels, and other GitHub API operations |
+
+> **Why a separate name?** GitHub requires MCP config variable references to start with `COPILOT_MCP_`. The underlying PAT is the same as `GH_AW_AGENT_TOKEN` and must be rotated together.
+
+> **Why the `copilot` environment?** The `${{ secrets.COPILOT_MCP_* }}` syntax in agent YAML frontmatter resolves secrets from the `copilot` environment only — repo-level Action secrets are not available for MCP variable substitution.
+
+#### Remove any repo-level MCP UI config
+
+If you previously configured a GitHub MCP server in **Settings → Copilot → Cloud agent**, remove it. The wrapper agents now carry their own per-agent MCP config in YAML frontmatter. Leaving the repo-level config in place would merge additional tools into the agent's session, bypassing the per-agent least-privilege tool lists.
+
+#### `copilot-setup-steps.yml`
+
+The framework ships `copilot-setup-steps.yml` in `.github/workflows/`. This workflow runs automatically before every Copilot coding agent session. It is shipped as a ready-to-extend template — add your own setup steps (dependency installation, tool setup, etc.) as needed.
+
+> **Note:** The wrapper agents commit via the `create_or_update_file` MCP tool (GitHub Contents API), not `git push`. The setup steps file does not need to inject write credentials — the MCP token handles write access.
 
 ---
 

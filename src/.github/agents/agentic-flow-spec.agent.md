@@ -6,13 +6,29 @@ tools:
   - 'read'
   - 'edit'
   - 'search'
-  - 'github/github-mcp-server/get_issue'
-  - 'github/github-mcp-server/search_pull_requests'
-  - 'github/github-mcp-server/get_pull_request'
-  - 'github/github-mcp-server/list_issue_comments'
-  - 'github/github-mcp-server/create_pull_request_review'
-  - 'github/github-mcp-server/create_issue_comment'
-  - 'github/github-mcp-server/add_labels_to_issue'
+  - 'github-write/get_issue'
+  - 'github-write/search_pull_requests'
+  - 'github-write/get_pull_request'
+  - 'github-write/get_file_contents'
+  - 'github-write/list_issue_comments'
+  - 'github-write/create_pull_request_review'
+  - 'github-write/create_issue_comment'
+  - 'github-write/create_or_update_file'
+mcp-servers:
+  github-write:
+    type: http
+    url: https://api.githubcopilot.com/mcp/
+    headers:
+      Authorization: "Bearer ${{ secrets.COPILOT_MCP_GITHUB_WRITE_TOKEN }}"
+    tools:
+      - get_issue
+      - search_pull_requests
+      - get_pull_request
+      - get_file_contents
+      - list_issue_comments
+      - create_pull_request_review
+      - create_issue_comment
+      - create_or_update_file
 ---
 
 # agentic-flow-spec — speckit spec wrapper
@@ -31,7 +47,7 @@ Your job is to enforce agentic-flow's runtime contract:
 - **Only write files that belong to the active spec stage**
 - **Always complete the required feedback loop before finishing**
 - **Never execute slash commands or merge actions yourself** — any next-step instructions are for the human reviewer
-- **Do not spend the run on credential or transport debugging** — if a normal commit/push/comment attempt hits auth or firewall errors, report the failure clearly instead of probing with `gh auth`, `curl`, `ssh`, or alternate push methods
+- **Do not use `git push` to commit files** — always use the `create_or_update_file` MCP tool (see **Committing Changes** below). The Copilot integration token lacks write access when assigned to PRs; the API path is the only reliable commit method
 
 The speckit documents define the artefact content and review criteria. If a speckit document suggests generic bootstrap behavior that conflicts with these rules (for example creating a branch or opening a PR), **agentic-flow rules win**.
 
@@ -100,7 +116,7 @@ Do **not** create or update plan-stage files, tasks-stage files, application cod
 4. Run the feedback loop:
    - Clarify
    - Analyze
-5. Commit and push the current branch.
+5. **Commit** the spec-stage files to the current branch (see **Committing Changes** below).
    - Fresh spec: `feat(spec): generate spec.md for issue #N`
    - Refine: `feat(spec): refine spec.md for issue #N`
 
@@ -109,7 +125,10 @@ Do **not** create or update plan-stage files, tasks-stage files, application cod
 
 6. Update the PR description using `gh pr edit <number> --body "<body>"`. Use the **PR Description Format** below. This makes the next steps immediately visible to anyone who opens the PR. (`gh` CLI is used here because MCP does not expose a PR body update tool.)
 
-7. Post a summary comment on the spec PR using `create_issue_comment`. Include the `agentic-flow-context` block exactly as shown in the PR Summary Format below.
+7. Post a summary comment on the spec PR using `create_issue_comment`. The comment **MUST** include the `<!-- agentic-flow-context ... -->` HTML comment block exactly as shown in the PR Summary Format below. This block is machine-critical — without it, downstream pipeline phases (`/approve-spec`, `/refine-spec`) will fail.
+
+   > [!CAUTION]
+   > **The `<!-- agentic-flow-context -->` block is NOT optional.** Copy it verbatim from the PR Summary Format section. Omitting it silently breaks the pipeline.
 
 8. Run the **Completion Gate** below before returning any conversational reply to the reviewer.
 
@@ -233,6 +252,25 @@ Run mode: {start|refine}
 ```
 
 Include any supporting spec-stage files you created or updated in the summary body.
+
+## Committing Changes
+
+Use the `create_or_update_file` MCP tool to commit each file via the GitHub Contents API. Do **not** use `git push` — the Copilot integration token lacks write access on PR assignments.
+
+For each file you need to commit:
+
+1. Determine the target branch name from the PR.
+2. For **existing files**: call `get_file_contents` to obtain the current blob `sha`.
+3. Call `create_or_update_file` with:
+   - `owner` / `repo` — from the repository context
+   - `path` — the file path (e.g. `specs/001-feature/spec.md`)
+   - `content` — the full file content
+   - `message` — the commit message (same for all files in this batch)
+   - `branch` — the PR branch name
+   - `sha` — the current blob SHA (required for updates; omit for new files)
+4. Each call creates a separate commit — this is expected.
+
+If `create_or_update_file` fails, report the error clearly in a PR comment and exit in failure state.
 
 ## Error Handling
 

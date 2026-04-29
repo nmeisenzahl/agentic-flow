@@ -6,12 +6,29 @@ tools:
   - 'read'
   - 'edit'
   - 'search'
-  - 'github/github-mcp-server/get_issue'
-  - 'github/github-mcp-server/get_pull_request'
-  - 'github/github-mcp-server/list_issue_comments'
-  - 'github/github-mcp-server/create_pull_request_review'
-  - 'github/github-mcp-server/create_issue_comment'
-  - 'github/github-mcp-server/add_labels_to_issue'
+  - 'github-write/get_issue'
+  - 'github-write/get_pull_request'
+  - 'github-write/get_file_contents'
+  - 'github-write/list_issue_comments'
+  - 'github-write/create_pull_request_review'
+  - 'github-write/create_issue_comment'
+  - 'github-write/create_or_update_file'
+  - 'github-write/issue_write'
+mcp-servers:
+  github-write:
+    type: http
+    url: https://api.githubcopilot.com/mcp/
+    headers:
+      Authorization: "Bearer ${{ secrets.COPILOT_MCP_GITHUB_WRITE_TOKEN }}"
+    tools:
+      - get_issue
+      - get_pull_request
+      - get_file_contents
+      - list_issue_comments
+      - create_pull_request_review
+      - create_issue_comment
+      - create_or_update_file
+      - issue_write
 ---
 
 # agentic-flow-tasks — speckit tasks wrapper
@@ -30,7 +47,7 @@ Generate the tasks-stage outputs on the current spec PR branch by following the 
 - **Only write files that belong to the active tasks stage**
 - **Always complete the required analyze + checklist feedback loop before finishing**
 - **Never execute slash commands or merge actions yourself** — any next-step instructions are for the human reviewer
-- **Do not spend the run on credential or transport debugging** — if a normal commit/push/comment attempt hits auth or firewall errors, report the failure clearly instead of probing with `gh auth`, `curl`, `ssh`, or alternate push methods
+- **Do not use `git push` to commit files** — always use the `create_or_update_file` MCP tool (see **Committing Changes** below). The Copilot integration token lacks write access when assigned to PRs; the API path is the only reliable commit method
 
 If a referenced speckit document suggests generic bootstrap behavior that conflicts with these rules, **agentic-flow rules win**.
 
@@ -81,15 +98,23 @@ Do **not** create or update implementation code, implementation PR artefacts, or
 5. Run the feedback loop:
    - Analyze
    - Checklist
-6. Commit and push the current branch with:
+6. **Commit** the tasks-stage files to the current branch (see **Committing Changes** below) with:
    - `feat(tasks): generate tasks.md for issue #N`
 
 > [!IMPORTANT]
 > **Committing is NOT the end of your task.** You MUST complete steps 7–9 and both Gates A and B before returning any reply. Skipping any of them silently breaks post-merge sub-issue creation.
 
-7. Post a summary comment on the spec PR using `create_issue_comment`. Include the `agentic-flow-context` block exactly as shown in the PR Summary Format below.
+7. Post a summary comment on the spec PR using `create_issue_comment`. The comment **MUST** include the `<!-- agentic-flow-context ... -->` HTML comment block exactly as shown in the PR Summary Format below. This block is machine-critical — without it, post-merge sub-issue creation will fail.
 
-8. If analyze and checklist both pass, apply the `ready-to-merge` label to the spec PR using `add_labels_to_issue`.
+   > [!CAUTION]
+   > **The `<!-- agentic-flow-context -->` block is NOT optional.** It must appear in the comment body exactly as specified. If you omit it, the post-merge workflow cannot parse the feature issue number or spec directory, and sub-issue creation will silently fail. Copy it verbatim from the PR Summary Format section.
+
+8. If analyze and checklist both pass, apply the `ready-to-merge` label to the spec PR. Follow this exact sequence — `issue_write` **replaces** the full label set, so you must read first:
+   1. Call `get_pull_request` to fetch the current PR. Extract the label names array from the response.
+   2. If `ready-to-merge` is already present, skip to step 9.
+   3. Build the new labels array: append `ready-to-merge` to the existing label names.
+   4. Call `issue_write` with `method: "update"`, `issue_number` set to the PR number, and `labels` set to the full array from step 3.
+   5. Call `get_pull_request` again and verify `ready-to-merge` appears in the labels.
 
    > [!IMPORTANT]
    > **The `ready-to-merge` label is the trigger for post-merge sub-issue creation.** Without it the `post-merge-trigger` workflow will skip silently when the PR is merged. This step is mandatory on the pass path — do not skip it.
@@ -149,7 +174,7 @@ Skip this gate if the run ended on the ⚠️ path (outstanding findings remain 
 2. Check that `ready-to-merge` appears in the PR's labels list.
 3. If present: Gate passes.
 4. If missing: wait briefly (API propagation lag), then check once more.
-5. If still missing: retry `add_labels_to_issue` once, then check one final time.
+5. If still missing: call `get_pull_request` to fetch the current label names, append `ready-to-merge`, and call `issue_write` with `method: "update"` and the full label array. Then call `get_pull_request` one final time to verify.
 6. If still missing after the retry: post the following error comment and exit in **failure** state — do not return a successful reply:
    ```markdown
    ## ❌ Label Not Applied — Merge Blocked
@@ -218,6 +243,25 @@ Feature issue: #N
 ```
 
 Include any supporting tasks-stage files you created or updated in the summary body.
+
+## Committing Changes
+
+Use the `create_or_update_file` MCP tool to commit each file via the GitHub Contents API. Do **not** use `git push` — the Copilot integration token lacks write access on PR assignments.
+
+For each file you need to commit:
+
+1. Determine the target branch name from the PR.
+2. For **existing files**: call `get_file_contents` to obtain the current blob `sha`.
+3. Call `create_or_update_file` with:
+   - `owner` / `repo` — from the repository context
+   - `path` — the file path (e.g. `specs/001-feature/tasks.md`)
+   - `content` — the full file content
+   - `message` — the commit message (same for all files in this batch)
+   - `branch` — the PR branch name
+   - `sha` — the current blob SHA (required for updates; omit for new files)
+4. Each call creates a separate commit — this is expected.
+
+If `create_or_update_file` fails, report the error clearly in a PR comment and exit in failure state.
 
 ## Error Handling
 

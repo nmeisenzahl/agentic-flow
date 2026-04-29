@@ -34,6 +34,9 @@ This file defines **framework-wide invariants only**. Do not use it for phase-sp
 | `research-in-progress` / `research-complete` | Research status |
 | `spec-in-progress` | Spec PR exists and the spec pipeline is active |
 | `ready-to-merge` | `agentic-flow-tasks` applies this when analyze + checklist both pass — merge the PR when ready |
+| `tasks-created` | All task sub-issues created — pipeline complete (terminal state) |
+| `agentic-flow-task` | Applied to every task sub-issue created by the post-merge workflow |
+| `agentic-flow-audit` | Applied to audit/review task sub-issues (title starts with Audit, Review, Verify, or Validate) |
 
 ## Wrapper Ownership
 

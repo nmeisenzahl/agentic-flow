@@ -67,6 +67,18 @@ done
 
 > Lock files are gitignored and excluded from the release zip. Run `gh aw compile` locally to verify, but do not commit the output.
 
+### Compile in adopting project
+
+Adopting repos must compile and commit lock files after installing or updating `.md` workflow sources. Both the `.md` source and its `.lock.yml` must always be in sync — updating one without the other causes a "Lock file outdated" error at runtime.
+
+```bash
+gh aw compile .github/workflows/*.md
+git add .github/workflows/*.lock.yml
+git commit -m "chore: compile agentic workflow lock files"
+```
+
+> **Important:** When manually updating a `.md` workflow source, always recompile and commit the corresponding `.lock.yml`. Never update the `.lock.yml` alone without also updating its `.md` source.
+
 ---
 
 ## Dogfooding
@@ -90,6 +102,9 @@ developed using spec-kit locally via the specify slash commands.
 | `/approve-spec` and `/approve-plan` fire on spec PR | Phase guards now use file-existence checks on the PR branch; removes dependency on labels and pause-point comments (004-pr-slash-commands) |
 | All wrapper-agent handoffs use a custom PR assignment workaround | The `gh aw` built-in `assign_to_agent` gives Copilot a token scoped to the assigned issue/sub-issue, not the PR — so PR writes fail. All four wrapper handoffs (`/start-spec`, `/refine-spec`, `/approve-spec`, `/approve-plan`) now use `GH_AW_AGENT_TOKEN` + `replaceActorsForAssignable` to assign Copilot directly to the spec PR and post a startup comment |
 | agentic-flow ships wrappers, not speckit phase docs | `specify init` provides `.github/agents/speckit.*.agent.md`; agentic-flow wrappers adapt those docs to the existing PR/sub-issue environment without creating new branches or PRs |
+| Copilot coding agent commits via `create_or_update_file` API (not `git push`) | When assigned to a PR (not an issue), the Copilot integration token lacks `contents: write`, so `git push` always fails with 403. All three wrapper agents use the `create_or_update_file` MCP tool backed by `COPILOT_MCP_GITHUB_WRITE_TOKEN` as the sole commit path. `copilot-setup-steps.yml` is shipped as an optional environment-preparation template, not for credential injection. |
+| MCP config lives in agent YAML frontmatter (not repo UI) | Each wrapper agent declares its own `mcp-servers:` block with a `github-write` server pointing at `api.githubcopilot.com/mcp/`. This ships the MCP config as code, enables per-agent least-privilege tool lists, and avoids dependency on manual repo-level UI configuration. The `copilot` environment secret `COPILOT_MCP_GITHUB_WRITE_TOKEN` is still required. |
+| Post-merge safe-output job parses `tasks.md` directly (not agent JSON) | LLMs cannot reliably serialize complex markdown into valid JSON. The `create-task-issues` safe-output job fetches `tasks.md` at the merge commit SHA via `repos.getContent()` and parses it in JavaScript. The agent's only job is to verify the file exists and pass through inputs. Idempotency check (skip tasks with existing sub-issues) also runs in JS. |
 
 ---
 

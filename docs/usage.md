@@ -103,7 +103,7 @@ Re-running `/start-spec` when a spec PR exists → agent posts link to the exist
 
 ### Re-run Post-merge
 
-Re-run `post-merge.md` from the GitHub Actions UI (dispatch the **Create Task Issues** workflow). The workflow is idempotent — it calls `issue_read(get_sub_issues)` on the feature issue and skips any task whose title already matches an existing sub-issue.
+Re-run from the GitHub Actions UI (dispatch the **Create Task Issues** workflow) with the same `feature_issue_number`, `spec_directory`, `pr_number`, and `merge_commit_sha`. The workflow is idempotent — the safe-output job fetches `tasks.md` directly, parses it in JavaScript, and skips any task whose title already matches an existing sub-issue on the feature issue.
 
 ---
 

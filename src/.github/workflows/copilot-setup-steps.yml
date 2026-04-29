@@ -1,0 +1,34 @@
+# Copilot Cloud Agent — Setup Steps
+#
+# Runs BEFORE the Copilot coding agent starts on every PR/issue assignment.
+# Use this file to pre-install tools, set up the development environment,
+# or cache dependencies so that the agent starts faster.
+#
+# The agentic-flow wrapper agents commit via the `create_or_update_file`
+# MCP tool (GitHub Contents API), so this file does NOT need to inject
+# write-capable git credentials. It is shipped as a ready-to-extend
+# template; add your own setup steps below.
+#
+# See docs/init.md §5b and the GitHub docs for customization options:
+#   https://docs.github.com/en/copilot/customizing-copilot/customizing-the-development-environment-for-copilot-coding-agent
+
+name: Copilot Setup Steps
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/copilot-setup-steps.yml
+  pull_request:
+    paths:
+      - .github/workflows/copilot-setup-steps.yml
+
+jobs:
+  # The job MUST be called `copilot-setup-steps` or it will not be picked up by Copilot.
+  copilot-setup-steps:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
