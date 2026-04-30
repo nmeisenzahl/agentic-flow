@@ -39,6 +39,13 @@ Create the following labels before first use:
 | `research-complete` | `#0e8a16` | Research findings appended; ready for spec |
 | `spec-in-progress` | `#d93f0b` | Spec is being authored |
 | `ready-to-merge` | `#0e8a16` | Applied automatically by `agentic-flow-tasks` when analyze + checklist pass — merge the PR when ready |
+| `tasks-created` | `#5319e7` | All task sub-issues created — triggers implementation pipeline |
+| `agentic-flow-task` | `#0075ca` | Applied to every task sub-issue |
+| `agentic-flow-audit` | `#e4e669` | Applied to audit/review task sub-issues |
+| `implementing` | `#d93f0b` | Feature issue: implementation phase in progress |
+| `implementation-complete` | `#0e8a16` | Feature issue: all tasks merged; audit phase |
+| `agentic-flow-task-pr` | `#0075ca` | Applied to task PRs targeting the feature branch |
+| `ready-to-merge-task` | `#0e8a16` | Agent signals task PR is ready for auto-merge |
 
 ---
 
@@ -62,6 +69,8 @@ Each agent declares only the tools it requires (least privilege):
 | `agentic-flow-spec` | `create_or_update_file`, `create_issue_comment`, `create_pull_request_review` | — |
 | `agentic-flow-plan` | `create_or_update_file`, `create_issue_comment`, `create_pull_request_review` | — |
 | `agentic-flow-tasks` | `create_or_update_file`, `create_issue_comment`, `create_pull_request_review` | `issue_write` |
+| `agentic-flow-implement` | `create_or_update_file`, `create_issue_comment` | `issue_write` |
+| `agentic-flow-audit` | `create_issue_comment`, `create_pull_request_review` | `issue_write` |
 
 All three agents connect to `https://api.githubcopilot.com/mcp/` using `COPILOT_MCP_GITHUB_WRITE_TOKEN` from the `copilot` environment (see §5b).
 

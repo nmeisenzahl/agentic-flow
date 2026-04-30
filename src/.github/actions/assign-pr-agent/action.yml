@@ -8,17 +8,23 @@ description: >-
 inputs:
   stage-name:
     description: >-
-      Pipeline stage name: plan | refine | tasks. Drives the safe-output item
-      type filter (assign_{stage}_agent_workaround), the context block Phase
-      and Run mode fields, and the startup comment natural-language request.
+      Pipeline stage name: plan | refine | tasks | implement | audit.
     required: true
   agent-name:
     description: >-
       Custom agent identifier to pass to replaceActorsForAssignable.
       Values: agentic-flow-plan | agentic-flow-spec | agentic-flow-tasks
     required: true
+  context-source:
+    description: >-
+      How to resolve context: safe-output (default, reads GH_AW_AGENT_OUTPUT)
+      or direct (all values provided via inputs below).
+    required: false
+    default: 'safe-output'
   pull-number:
-    description: 'String form of the spec PR number. Falls back to context.issue.number if empty.'
+    description: >-
+      PR number string. In direct mode, this is the task/feature PR number.
+      In safe-output mode, this falls back to context.issue.number if empty.
     required: false
   agent-token:
     description: 'GH_AW_AGENT_TOKEN secret (PAT with repo + copilot scopes).'
@@ -26,8 +32,21 @@ inputs:
   speckit-phase-agent:
     description: >-
       Path to the speckit phase agent file, e.g.
-      .github/agents/speckit.plan.agent.md
-    required: true
+      .github/agents/speckit.plan.agent.md.
+      Required for plan/refine/tasks stages. Leave empty for implement/audit.
+    required: false
+  feature-issue-number:
+    description: 'Feature issue number (direct mode only).'
+    required: false
+  spec-directory:
+    description: 'Spec directory, e.g. specs/001-my-feature (direct mode only).'
+    required: false
+  task-issue-number:
+    description: 'Task or audit issue number (direct mode only).'
+    required: false
+  feature-pr-number:
+    description: 'Feature PR number (direct mode, implement stage only).'
+    required: false
 
 outputs:
   startup-comment-id:
@@ -46,6 +65,11 @@ runs:
         AGENT_NAME: ${{ inputs.agent-name }}
         PULL_NUMBER: ${{ inputs.pull-number }}
         SPECKIT_PHASE_AGENT: ${{ inputs.speckit-phase-agent }}
+        CONTEXT_SOURCE: ${{ inputs.context-source }}
+        FEATURE_ISSUE_NUMBER_DIRECT: ${{ inputs.feature-issue-number }}
+        SPEC_DIRECTORY_DIRECT: ${{ inputs.spec-directory }}
+        TASK_ISSUE_NUMBER_DIRECT: ${{ inputs.task-issue-number }}
+        FEATURE_PR_NUMBER_DIRECT: ${{ inputs.feature-pr-number }}
       with:
         github-token: ${{ inputs.agent-token }}
         script: |
@@ -59,71 +83,99 @@ runs:
           const agentName = process.env.AGENT_NAME;
           const pullNumber = String(process.env.PULL_NUMBER ?? "").trim();
           const specKitPhaseAgent = String(process.env.SPECKIT_PHASE_AGENT ?? "").trim();
-          // ── Staged-mode early exit ──────────────────────────────────────────
-          if (process.env.GH_AW_SAFE_OUTPUTS_STAGED === "true") {
-            core.info(`Staged mode enabled; skipping ${stageName} agent assignment workaround.`);
-            return;
-          }
+          const contextSource = String(process.env.CONTEXT_SOURCE ?? "safe-output").trim();
+          const directMode = contextSource === "direct";
 
-          // ── Token presence check ────────────────────────────────────────────
-          if (!process.env.GH_AW_AGENT_TOKEN) {
-            fail(`GH_AW_AGENT_TOKEN secret is not configured. The ${stageName} assignment workaround requires a PAT for Copilot agent assignment.`);
-          }
+          let itemPullNumber;
+          let featureIssueNumber;
+          let specDirectory;
+          let primaryArtefact;
+          let taskIssueNumber = "";
+          let featurePRNumberDirect = "";
 
-          // ── Safe-output file read + JSON parse ──────────────────────────────
-          const outputPath = process.env.GH_AW_AGENT_OUTPUT;
-          if (!outputPath || !fs.existsSync(outputPath)) {
-            fail(`GH_AW_AGENT_OUTPUT is not available for the ${stageName} assignment workaround.`);
-          }
+          if (contextSource === "safe-output") {
+            // ── Staged-mode early exit ──────────────────────────────────────────
+            if (process.env.GH_AW_SAFE_OUTPUTS_STAGED === "true") {
+              core.info(`Staged mode enabled; skipping ${stageName} agent assignment workaround.`);
+              return;
+            }
 
-          let parsed;
-          try {
-            parsed = JSON.parse(fs.readFileSync(outputPath, "utf8"));
-          } catch (error) {
-            fail(`Failed to parse GH_AW_AGENT_OUTPUT for the ${stageName} assignment workaround: ${error instanceof Error ? error.message : String(error)}.`);
-          }
+            // ── Token presence check ────────────────────────────────────────────
+            if (!process.env.GH_AW_AGENT_TOKEN) {
+              fail(`GH_AW_AGENT_TOKEN secret is not configured. The ${stageName} assignment workaround requires a PAT for Copilot agent assignment.`);
+            }
 
-          // ── Item filter + count guard ───────────────────────────────────────
-          const parsedItems = Array.isArray(parsed.items) ? parsed.items : [];
-          const itemType = `assign_${stageName}_agent_workaround`;
-          const items = parsedItems.filter(item => item.type === itemType);
+            // ── Safe-output file read + JSON parse ──────────────────────────────
+            const outputPath = process.env.GH_AW_AGENT_OUTPUT;
+            if (!outputPath || !fs.existsSync(outputPath)) {
+              fail(`GH_AW_AGENT_OUTPUT is not available for the ${stageName} assignment workaround.`);
+            }
 
-          if (items.length === 0) {
-            core.info(`No ${itemType} requests found.`);
-            return;
-          }
+            let parsed;
+            try {
+              parsed = JSON.parse(fs.readFileSync(outputPath, "utf8"));
+            } catch (error) {
+              fail(`Failed to parse GH_AW_AGENT_OUTPUT for the ${stageName} assignment workaround: ${error instanceof Error ? error.message : String(error)}.`);
+            }
 
-          if (items.length > 1) {
-            fail(`Expected exactly one ${itemType} request, found ${items.length}.`);
-          }
+            // ── Item filter + count guard ───────────────────────────────────────
+            const parsedItems = Array.isArray(parsed.items) ? parsed.items : [];
+            const itemType = `assign_${stageName}_agent_workaround`;
+            const items = parsedItems.filter(item => item.type === itemType);
 
-          // gh aw does not populate ${{ inputs.X }} in safe-output jobs, so
-          // read all dynamic values directly from the agent output item.
-          const featureIssueNumber = String(items[0].feature_issue_number ?? "").trim();
-          const specDirectory = String(items[0].spec_directory ?? "").trim();
-          const stageArtefact = stageName === "refine" ? "spec.md" : stageName === "tasks" ? "tasks.md" : "plan.md";
-          const primaryArtefact = specDirectory ? `${specDirectory}/${stageArtefact}` : "";
+            if (items.length === 0) {
+              core.info(`No ${itemType} requests found.`);
+              return;
+            }
 
-          // ── PR number match guard ───────────────────────────────────────────
-          const itemPullNumber = String(items[0].pull_number ?? "").trim();
-          if (!/^[1-9]\d*$/.test(itemPullNumber)) {
-            fail(`Invalid pull_number for ${stageName} agent assignment: ${JSON.stringify(items[0].pull_number)}.`);
-          }
+            if (items.length > 1) {
+              fail(`Expected exactly one ${itemType} request, found ${items.length}.`);
+            }
 
-          const expectedPullNumber = pullNumber || String(context.issue.number ?? "").trim();
-          if (!expectedPullNumber) {
-            fail("The triggering PR number is not available.");
-          }
-          if (itemPullNumber !== expectedPullNumber) {
-            fail(`${itemType} must target the triggering PR #${expectedPullNumber}, received #${itemPullNumber}.`);
-          }
+            // gh aw does not populate ${{ inputs.X }} in safe-output jobs, so
+            // read all dynamic values directly from the agent output item.
+            featureIssueNumber = String(items[0].feature_issue_number ?? "").trim();
+            specDirectory = String(items[0].spec_directory ?? "").trim();
+            const stageArtefact = stageName === "refine" ? "spec.md" : stageName === "tasks" ? "tasks.md" : "plan.md";
+            primaryArtefact = specDirectory ? `${specDirectory}/${stageArtefact}` : "";
 
-          if (!/^[1-9]\d*$/.test(featureIssueNumber)) {
-            fail(`Invalid feature_issue_number for ${stageName} agent assignment: ${JSON.stringify(featureIssueNumber)}.`);
-          }
+            // ── PR number match guard ───────────────────────────────────────────
+            itemPullNumber = String(items[0].pull_number ?? "").trim();
+            if (!/^[1-9]\d*$/.test(itemPullNumber)) {
+              fail(`Invalid pull_number for ${stageName} agent assignment: ${JSON.stringify(items[0].pull_number)}.`);
+            }
 
-          if (!/^specs\/[0-9]{3}-[a-z0-9][a-z0-9-]*$/.test(specDirectory)) {
-            fail(`Invalid spec_directory for ${stageName} agent assignment: ${JSON.stringify(specDirectory)}.`);
+            const expectedPullNumber = pullNumber || String(context.issue.number ?? "").trim();
+            if (!expectedPullNumber) {
+              fail("The triggering PR number is not available.");
+            }
+            if (itemPullNumber !== expectedPullNumber) {
+              fail(`${itemType} must target the triggering PR #${expectedPullNumber}, received #${itemPullNumber}.`);
+            }
+
+            if (!/^[1-9]\d*$/.test(featureIssueNumber)) {
+              fail(`Invalid feature_issue_number for ${stageName} agent assignment: ${JSON.stringify(featureIssueNumber)}.`);
+            }
+
+            if (!/^specs\/[0-9]{3}-[a-z0-9][a-z0-9-]*$/.test(specDirectory)) {
+              fail(`Invalid spec_directory for ${stageName} agent assignment: ${JSON.stringify(specDirectory)}.`);
+            }
+          } else {
+            // ── Direct mode: all context provided via inputs ────────────────────
+            const pullNumberFromInput = String(process.env.PULL_NUMBER ?? "").trim();
+            featureIssueNumber = String(process.env.FEATURE_ISSUE_NUMBER_DIRECT ?? "").trim();
+            specDirectory = String(process.env.SPEC_DIRECTORY_DIRECT ?? "").trim();
+            taskIssueNumber = String(process.env.TASK_ISSUE_NUMBER_DIRECT ?? "").trim();
+            featurePRNumberDirect = String(process.env.FEATURE_PR_NUMBER_DIRECT ?? "").trim();
+
+            if (!/^[1-9]\d*$/.test(pullNumberFromInput)) fail(`Invalid pull-number for ${stageName}: ${JSON.stringify(pullNumberFromInput)}`);
+            if (!/^[1-9]\d*$/.test(featureIssueNumber)) fail(`Invalid feature-issue-number for ${stageName}: ${JSON.stringify(featureIssueNumber)}`);
+            if (!/^specs\/[0-9]{3}-[a-z0-9][a-z0-9-]*$/.test(specDirectory)) fail(`Invalid spec-directory for ${stageName}: ${JSON.stringify(specDirectory)}`);
+            if (!/^[1-9]\d*$/.test(taskIssueNumber)) fail(`Invalid task-issue-number for ${stageName}: ${JSON.stringify(taskIssueNumber)}`);
+
+            // Set variables to match what safe-output mode would have produced
+            itemPullNumber = pullNumberFromInput;
+            primaryArtefact = "";
           }
 
           const owner = context.repo.owner;
@@ -223,6 +275,9 @@ runs:
           let agentHeader;
           let instructions;
           let additionalContextFields = [];
+          let stageTaskField = "";
+          let stageIssueRef = "";
+          let stageIssueLabel = "";
 
           if (stageName === "plan") {
             firstLine = `@copilot please use the already-assigned \`${agentName}\` custom agent to generate \`${primaryArtefact}\` for this pull request from \`${specDirectory}/spec.md\`, commit the result to \`${headRefName}\`, and post your completion summary using the **PR Summary Format** from your agent instructions (the comment MUST include the \`<!-- agentic-flow-context ... -->\` block).`;
@@ -271,8 +326,41 @@ runs:
               `4. Commit and push the updated tasks-stage artefacts to \`${headRefName}\`.`,
               `5. Post a summary comment on PR #${itemPullNumber} using the **PR Summary Format** from your \`agentic-flow-tasks\` agent instructions. The comment MUST include the \`<!-- agentic-flow-context ... -->\` block exactly as specified — this is machine-critical for post-merge sub-issue creation.`,
             ].join("\n");
+          } else if (stageName === "implement") {
+            stageIssueRef = directMode ? taskIssueNumber : "";
+            stageIssueLabel = "Task issue";
+            firstLine = `@copilot please use the already-assigned \`${agentName}\` custom agent to implement the task described in issue #${stageIssueRef} on branch \`${headRefName}\` and post your completion summary when done (the comment MUST include the \`<!-- agentic-flow-context ... -->\` block).`;
+            contextPhase = "implement";
+            contextRunMode = "implement";
+            agentHeader = "Implementation Agent — Startup Instructions";
+            stageTaskField = `Task issue: #${stageIssueRef}`;
+            instructions = [
+              `1. Read the task issue #${stageIssueRef} body in full — it describes exactly what to implement.`,
+              `2. Read \`${specDirectory}/spec.md\`, \`${specDirectory}/plan.md\`, and \`${specDirectory}/tasks.md\` for full feature context.`,
+              `3. Read the current state of the feature branch (\`${baseRefName}\`) to understand what has already been implemented.`,
+              `4. Implement the task on branch \`${headRefName}\`. Use \`create_or_update_file\` to commit all changes — do NOT use \`git push\`.`,
+              `5. Post an implementation summary on this PR. The comment MUST include the \`<!-- agentic-flow-context ... -->\` block.`,
+              `6. Apply the \`ready-to-merge-task\` label to this PR to signal completion.`,
+            ].join("\n");
+          } else if (stageName === "audit") {
+            stageIssueRef = directMode ? taskIssueNumber : "";
+            stageIssueLabel = "Audit task issue";
+            firstLine = `@copilot please use the already-assigned \`${agentName}\` custom agent to perform the audit described in issue #${stageIssueRef} on this feature PR and post your review when done.`;
+            contextPhase = "audit";
+            contextRunMode = "audit";
+            agentHeader = "Audit Agent — Startup Instructions";
+            stageTaskField = `Audit task issue: #${stageIssueRef}`;
+            instructions = [
+              `1. Read the audit task issue #${stageIssueRef} body — it describes exactly what to validate.`,
+              `2. Read \`${specDirectory}/spec.md\`, \`${specDirectory}/plan.md\`, and \`${specDirectory}/tasks.md\` for full feature context.`,
+              `3. Fetch and review the complete diff of this feature PR (all files changed across all implementation tasks).`,
+              `4. Perform the audit/validation described in the audit task issue.`,
+              `5. Post a formal PR review (\`APPROVE\` or \`REQUEST_CHANGES\`) with detailed findings.`,
+              `6. Update issue #${stageIssueRef} with a validation summary, then close the issue if all checks pass.`,
+              `7. Post a context comment on this PR with the \`<!-- agentic-flow-context ... -->\` block.`,
+            ].join("\n");
           } else {
-            fail(`Unknown stage-name: ${JSON.stringify(stageName)}. Must be plan | refine | tasks.`);
+            fail(`Unknown stage-name: ${JSON.stringify(stageName)}. Must be plan | refine | tasks | implement | audit.`);
           }
 
           const contextBlock = [
@@ -281,10 +369,20 @@ runs:
             `Run mode: ${contextRunMode}`,
             `Feature issue: #${featureIssueNumber}`,
             `Spec directory: ${specDirectory}`,
-            `Primary artefact: ${primaryArtefact}`,
-            `Speckit phase agent: ${specKitPhaseAgent}`,
+            ...(stageTaskField ? [stageTaskField] : []),
+            ...(stageName === "implement" ? [
+              `Feature branch: \`${baseRefName}\``,
+              `Task branch: \`${headRefName}\``,
+              ...(featurePRNumberDirect ? [`Feature PR: #${featurePRNumberDirect}`] : []),
+            ] : []),
+            ...(stageName === "audit" ? [
+              `Feature PR: #${itemPullNumber}`,
+              `Feature branch: \`${headRefName}\``,
+            ] : []),
+            ...(primaryArtefact ? [`Primary artefact: ${primaryArtefact}`] : []),
+            ...(specKitPhaseAgent ? [`Speckit phase agent: ${specKitPhaseAgent}`] : []),
             ...additionalContextFields,
-            "Constitution: .specify/memory/constitution.md",
+            ...(stageName !== "implement" && stageName !== "audit" ? ["Constitution: .specify/memory/constitution.md"] : []),
             "-->",
           ].join("\n");
 
@@ -292,11 +390,31 @@ runs:
             ? `> [!IMPORTANT]\n> **👉 Next step for the human reviewer:** Once you have reviewed \`${primaryArtefact}\`, post **\`/approve-plan\`** as a comment on this PR to proceed to task generation. Do not execute that command yourself.`
             : stageName === "refine"
             ? `> [!IMPORTANT]\n> **👉 Next step for the human reviewer:** Review the updated \`${primaryArtefact}\`, then post **\`/approve-spec\`** to proceed to plan generation, or **\`/refine-spec\`** for another spec iteration. Do not execute those commands yourself.`
-            : `> [!IMPORTANT]\n> **👉 Next step for the human reviewer:** Review \`${primaryArtefact}\` in this PR. When satisfied, **merge this PR** to create the implementation task sub-issues. Do not merge the PR or trigger follow-up workflow actions yourself.`;
+            : stageName === "tasks"
+            ? `> [!IMPORTANT]\n> **👉 Next step for the human reviewer:** Review \`${primaryArtefact}\` in this PR. When satisfied, **merge this PR** to create the implementation task sub-issues. Do not merge the PR or trigger follow-up workflow actions yourself.`
+            : stageName === "implement"
+            ? `> This task PR will be **auto-merged** once CI checks pass. No human action required.`
+            : `> [!IMPORTANT]\n> **👉 Next step for the human reviewer:** Review the audit findings on this feature PR. If the audit requested changes, address them and post \`/rerun-audit\` as a comment to re-run the audit.`;
 
-          const sourceArtefactsRow = stageName === "tasks"
+          const sourceArtefactsRow = (stageName === "tasks" || stageName === "implement" || stageName === "audit")
             ? `| Source artefacts | \`${specDirectory}/spec.md\`, \`${specDirectory}/plan.md\` |`
             : `| Source artefact | \`${specDirectory}/spec.md\` |`;
+
+          const yourTaskLine = stageName === "plan"
+            ? `**Your task**: Generate \`${primaryArtefact}\` — the structured implementation plan for this feature.`
+            : stageName === "refine"
+            ? `**Your task**: Generate \`${primaryArtefact}\` — the refined spec for this feature.`
+            : stageName === "tasks"
+            ? `**Your task**: Generate \`${primaryArtefact}\` — the dependency-ordered implementation task breakdown for this feature.`
+            : stageName === "implement"
+            ? `**Your task**: Implement the changes described in task issue #${stageIssueRef} on branch \`${headRefName}\`.`
+            : `**Your task**: Perform the audit described in issue #${stageIssueRef} and review this feature PR.`;
+
+          const triggeredByLine = stageName === "implement"
+            ? `Triggered by agentic-flow implementation pipeline for task #${stageIssueRef}`
+            : stageName === "audit"
+            ? `Triggered by agentic-flow audit pipeline for audit task #${stageIssueRef}`
+            : `Triggered by \`/${stageName === "plan" ? "approve-spec" : stageName === "refine" ? "refine-spec" : "approve-plan"}\` on PR #${itemPullNumber} — agentic-flow`;
 
           const startupCommentBody = [
             firstLine,
@@ -306,14 +424,15 @@ runs:
             "",
             `You are the ${stageName} agent in the agentic-flow pipeline.`,
             "",
-            `**Your task**: Generate \`${primaryArtefact}\` — the ${stageName === "refine" ? "refined spec" : stageName === "plan" ? "structured implementation plan" : "dependency-ordered implementation task breakdown"} for this feature.`,
+            yourTaskLine,
             "",
             "| Field | Value |",
             "| --- | --- |",
             `| Feature Issue | #${featureIssueNumber} |`,
             `| Spec PR | #${itemPullNumber} |`,
             `| Spec directory | \`${specDirectory}\` |`,
-            `| Primary artefact | \`${primaryArtefact}\` |`,
+            ...(primaryArtefact ? [`| Primary artefact | \`${primaryArtefact}\` |`] : []),
+            ...(stageIssueRef ? [`| ${stageIssueLabel} | #${stageIssueRef} |`] : []),
             sourceArtefactsRow,
             `| Feature branch | \`${headRefName}\` |`,
             "",
@@ -322,7 +441,7 @@ runs:
             "",
             humanNote,
             "",
-            `Triggered by \`/${stageName === "plan" ? "approve-spec" : stageName === "refine" ? "refine-spec" : "approve-plan"}\` on PR #${itemPullNumber} — agentic-flow`,
+            triggeredByLine,
           ].join("\n");
 
           core.info(`Generated ${stageName} startup comment body for PR #${itemPullNumber}.`);

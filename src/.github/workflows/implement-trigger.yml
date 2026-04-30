@@ -1,0 +1,315 @@
+name: Implement Trigger (agentic-flow)
+on:
+  issues:
+    types: [labeled]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+  actions: write
+
+concurrency:
+  group: implement-trigger-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  trigger-implementation:
+    if: github.event.label.name == 'tasks-created' && !contains(github.event.issue.labels.*.name, 'implementing')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+      actions: write
+    steps:
+      - name: Ensure implementation labels exist
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const labels = [
+              { name: 'implementing',            description: 'Feature issue is in the implementation phase',        color: 'd93f0b' },
+              { name: 'implementation-complete', description: 'All implementation tasks done — audit/review phase', color: '0e8a16' },
+              { name: 'agentic-flow-task-pr',    description: 'Task PR targeting the feature implementation branch', color: '0075ca' },
+              { name: 'ready-to-merge-task',     description: 'Agent signals task PR is ready for auto-merge',       color: '0e8a16' },
+            ];
+            for (const label of labels) {
+              try {
+                await github.rest.issues.createLabel({ owner: context.repo.owner, repo: context.repo.repo, ...label });
+              } catch (e) {
+                if (e.status !== 422) throw e;
+              }
+            }
+
+      - name: Parse implement-ready context from feature issue
+        id: context
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo  = context.repo.repo;
+            const issueNumber = context.issue.number;
+
+            let mergeCommit  = '';
+            let specDirectory = '';
+            let page = 1;
+
+            outer: while (true) {
+              const { data: comments } = await github.rest.issues.listComments({
+                owner, repo, issue_number: issueNumber, per_page: 100, page,
+              });
+              if (comments.length === 0) break;
+              for (const comment of [...comments].reverse()) {
+                const body = comment.body || '';
+                if (!body.includes('<!-- agentic-flow-implement-ready')) continue;
+                const mergeMatch = body.match(/Merge commit:\s*([0-9a-f]{40})/);
+                const specMatch  = body.match(/Spec directory:\s*(specs\/[^\s\n]+)/);
+                if (mergeMatch && specMatch) {
+                  mergeCommit   = mergeMatch[1];
+                  specDirectory = specMatch[1];
+                  break outer;
+                }
+              }
+              page++;
+            }
+
+            if (!mergeCommit || !specDirectory) {
+              core.setFailed('Could not find agentic-flow-implement-ready block in feature issue comments. Ensure post-merge completed successfully.');
+              return;
+            }
+
+            const branchSuffix = specDirectory.replace(/^specs\//, '');
+            core.setOutput('merge_commit',   mergeCommit);
+            core.setOutput('spec_directory', specDirectory);
+            core.setOutput('feature_branch', `implement/${branchSuffix}`);
+            core.setOutput('branch_suffix',  branchSuffix);
+
+      - name: Create feature branch
+        id: create-branch
+        uses: actions/github-script@v8
+        with:
+          github-token: ${{ secrets.GH_AW_AGENT_TOKEN }}
+          script: |
+            const owner      = context.repo.owner;
+            const repo       = context.repo.repo;
+            const branchName = '${{ steps.context.outputs.feature_branch }}';
+            const sha        = '${{ steps.context.outputs.merge_commit }}';
+
+            try {
+              await github.rest.git.getRef({ owner, repo, ref: `heads/${branchName}` });
+              core.info(`Branch ${branchName} already exists; skipping creation.`);
+            } catch (e) {
+              if (e.status !== 404) throw e;
+              await github.rest.git.createRef({ owner, repo, ref: `refs/heads/${branchName}`, sha });
+              core.info(`Created branch ${branchName} at ${sha}.`);
+            }
+
+      - name: Open draft feature PR
+        id: create-pr
+        uses: actions/github-script@v8
+        with:
+          github-token: ${{ secrets.GH_AW_AGENT_TOKEN }}
+          script: |
+            const owner         = context.repo.owner;
+            const repo          = context.repo.repo;
+            const featureBranch = '${{ steps.context.outputs.feature_branch }}';
+            const issueNumber   = context.issue.number;
+            const specDirectory = '${{ steps.context.outputs.spec_directory }}';
+
+            const { data: existing } = await github.rest.pulls.list({
+              owner, repo, head: `${owner}:${featureBranch}`, base: 'main', state: 'open',
+            });
+            if (existing.length > 0) {
+              core.info(`Feature PR already exists: #${existing[0].number}`);
+              core.setOutput('pr_number', String(existing[0].number));
+              return;
+            }
+
+            const { data: issue } = await github.rest.issues.get({ owner, repo, issue_number: issueNumber });
+            const { data: pr }    = await github.rest.pulls.create({
+              owner, repo,
+              title: `feat: ${issue.title} (#${issueNumber})`,
+              body: [
+                `Implements feature #${issueNumber}.`,
+                '',
+                `**Spec directory:** \`${specDirectory}\``,
+                `**Feature issue:** #${issueNumber}`,
+                '',
+                '> [!NOTE]',
+                '> This PR accumulates all task implementations. Each task runs in its own sub-branch and auto-merging task PR. Human review and merge is required to land this PR into `main`.',
+                '',
+                '---',
+                '_agentic-flow implementation pipeline_',
+              ].join('\n'),
+              head: featureBranch,
+              base: 'main',
+              draft: true,
+            });
+
+            core.info(`Opened draft feature PR #${pr.number}.`);
+            core.setOutput('pr_number', String(pr.number));
+
+      - name: Apply implementing label to feature issue
+        uses: actions/github-script@v8
+        with:
+          script: |
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              labels: ['implementing'],
+            });
+
+      - name: Post implementation started comment
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const owner         = context.repo.owner;
+            const repo          = context.repo.repo;
+            const issueNumber   = context.issue.number;
+            const featurePR     = '${{ steps.create-pr.outputs.pr_number }}';
+            const specDirectory = '${{ steps.context.outputs.spec_directory }}';
+
+            let subIssues = [];
+            try {
+              const { data } = await github.request(
+                'GET /repos/{owner}/{repo}/issues/{issue_number}/sub_issues',
+                { owner, repo, issue_number: issueNumber }
+              );
+              subIssues = data || [];
+            } catch (e) {
+              core.warning(`Could not fetch sub-issues: ${e.message}`);
+            }
+
+            const implTasks  = subIssues.filter(si => si.labels?.some(l => l.name === 'agentic-flow-task') && !si.labels?.some(l => l.name === 'agentic-flow-audit'));
+            const auditTasks = subIssues.filter(si => si.labels?.some(l => l.name === 'agentic-flow-audit'));
+
+            const taskList  = implTasks.map(i  => `- [ ] #${i.number}: ${i.title}`).join('\n') || '_No implementation tasks found_';
+            const auditList = auditTasks.map(i => `- [ ] #${i.number}: ${i.title}`).join('\n');
+
+            const lines = [
+              '## 🚀 Implementation Started',
+              '',
+              `**Feature PR:** #${featurePR}`,
+              `**Spec directory:** \`${specDirectory}\``,
+              '',
+              '### Implementation Tasks',
+              taskList,
+            ];
+            if (auditList) {
+              lines.push('', '### Audit Tasks', auditList);
+            }
+            lines.push('', '_agentic-flow implementation pipeline_');
+
+            await github.rest.issues.createComment({
+              owner, repo, issue_number: issueNumber, body: lines.join('\n'),
+            });
+
+      - name: Find first ready task and dispatch
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const owner         = context.repo.owner;
+            const repo          = context.repo.repo;
+            const issueNumber   = context.issue.number;
+            const featurePR     = '${{ steps.create-pr.outputs.pr_number }}';
+            const featureBranch = '${{ steps.context.outputs.feature_branch }}';
+            const specDirectory = '${{ steps.context.outputs.spec_directory }}';
+
+            let subIssues = [];
+            try {
+              const { data } = await github.request(
+                'GET /repos/{owner}/{repo}/issues/{issue_number}/sub_issues',
+                { owner, repo, issue_number: issueNumber }
+              );
+              subIssues = data || [];
+            } catch (e) {
+              core.setFailed(`Could not fetch sub-issues: ${e.message}`);
+              return;
+            }
+
+            const openImplTasks = subIssues.filter(si =>
+              si.labels?.some(l => l.name === 'agentic-flow-task') &&
+              !si.labels?.some(l => l.name === 'agentic-flow-audit') &&
+              si.state === 'open'
+            );
+
+            if (openImplTasks.length === 0) {
+              // No implementation tasks — go straight to audit or done
+              const openAuditTasks = subIssues.filter(si =>
+                si.labels?.some(l => l.name === 'agentic-flow-audit') && si.state === 'open'
+              );
+              if (openAuditTasks.length > 0) {
+                core.info(`No implementation tasks; dispatching audit for #${openAuditTasks[0].number}.`);
+                await github.rest.actions.createWorkflowDispatch({
+                  owner, repo,
+                  workflow_id: 'audit-dispatch.yml',
+                  ref: 'main',
+                  inputs: {
+                    feature_issue_number:     String(issueNumber),
+                    feature_pr_number:        featurePR,
+                    feature_branch:           featureBranch,
+                    audit_task_issue_number:  String(openAuditTasks[0].number),
+                    spec_directory:           specDirectory,
+                    first_audit:              'true',
+                  },
+                });
+              } else {
+                core.info('No tasks at all. Converting feature PR from draft and applying implementation-complete label.');
+                await github.rest.pulls.update({
+                  owner, repo, pull_number: Number(featurePR), draft: false,
+                });
+                await github.rest.issues.addLabels({
+                  owner, repo, issue_number: issueNumber, labels: ['implementation-complete'],
+                });
+              }
+              return;
+            }
+
+            // Build dependency map: parse "| **Depends on** | #N (T001) |" from each issue body
+            const depMap = new Map();
+            for (const task of openImplTasks) {
+              const deps = new Set();
+              try {
+                const { data: detail } = await github.rest.issues.get({ owner, repo, issue_number: task.number });
+                const body = detail.body || '';
+                const match = body.match(/\|\s*\*\*Depends on\*\*\s*\|\s*([^|\n]+)\|/);
+                if (match) {
+                  for (const ref of match[1].matchAll(/#(\d+)/g)) deps.add(Number(ref[1]));
+                }
+              } catch (e) {
+                core.warning(`Could not fetch issue #${task.number}: ${e.message}`);
+              }
+              depMap.set(task.number, deps);
+            }
+
+            const closedNumbers = new Set(
+              subIssues.filter(si =>
+                si.labels?.some(l => l.name === 'agentic-flow-task') &&
+                !si.labels?.some(l => l.name === 'agentic-flow-audit') &&
+                si.state === 'closed'
+              ).map(si => si.number)
+            );
+
+            const readyTask = openImplTasks.find(task =>
+              [...(depMap.get(task.number) || new Set())].every(dep => closedNumbers.has(dep))
+            );
+
+            if (!readyTask) {
+              core.setFailed('No ready tasks found — all open tasks have unresolved dependencies. This should not happen on first dispatch.');
+              return;
+            }
+
+            core.info(`Dispatching implement-dispatch for task #${readyTask.number}: ${readyTask.title}`);
+            await github.rest.actions.createWorkflowDispatch({
+              owner, repo,
+              workflow_id: 'implement-dispatch.yml',
+              ref: 'main',
+              inputs: {
+                feature_issue_number: String(issueNumber),
+                feature_pr_number:    featurePR,
+                feature_branch:       featureBranch,
+                task_issue_number:    String(readyTask.number),
+                spec_directory:       specDirectory,
+              },
+            });

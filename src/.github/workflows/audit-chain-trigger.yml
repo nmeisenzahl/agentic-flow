@@ -1,0 +1,233 @@
+name: Audit Chain Trigger (agentic-flow)
+on:
+  issues:
+    types: [closed]
+
+permissions:
+  contents: read
+  issues: read
+  actions: write
+
+jobs:
+  chain-next-audit:
+    if: contains(github.event.issue.labels.*.name, 'agentic-flow-audit')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+      actions: write
+    steps:
+      - name: Parse feature issue from closed audit issue
+        id: parse
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo  = context.repo.repo;
+            const auditIssueNumber = context.issue.number;
+
+            const { data: auditIssue } = await github.rest.issues.get({
+              owner, repo, issue_number: auditIssueNumber,
+            });
+
+            const body = auditIssue.body || '';
+
+            // Parse Feature issue reference from footer: "**Feature**: #N"
+            const featureMatch = body.match(/\*\*Feature\*\*[:\s]+#(\d+)/i);
+            if (!featureMatch) {
+              core.info('No Feature reference found in closed issue body; not an agentic-flow audit task. Skipping.');
+              core.setOutput('skip', 'true');
+              return;
+            }
+
+            core.setOutput('skip', 'false');
+            core.setOutput('feature_issue_number', featureMatch[1]);
+
+      - name: Find feature PR and remaining audit tasks
+        id: context
+        if: steps.parse.outputs.skip != 'true'
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const owner              = context.repo.owner;
+            const repo               = context.repo.repo;
+            const featureIssueNumber = Number('${{ steps.parse.outputs.feature_issue_number }}');
+
+            // Get sub-issues for feature issue
+            let subIssues = [];
+            try {
+              const { data } = await github.request(
+                'GET /repos/{owner}/{repo}/issues/{issue_number}/sub_issues',
+                { owner, repo, issue_number: featureIssueNumber }
+              );
+              subIssues = data || [];
+            } catch (e) {
+              core.setFailed(`Could not fetch sub-issues: ${e.message}`);
+              return;
+            }
+
+            const openAuditTasks = subIssues.filter(si =>
+              si.labels?.some(l => l.name === 'agentic-flow-audit') && si.state === 'open'
+            );
+
+            // Parse feature PR number and spec directory from feature issue comments
+            let featurePRNumber = '';
+            let specDirectory   = '';
+            let featureBranch   = '';
+
+            let page = 1;
+            outer: while (true) {
+              const { data: comments } = await github.rest.issues.listComments({
+                owner, repo, issue_number: featureIssueNumber, per_page: 100, page,
+              });
+              if (comments.length === 0) break;
+              for (const c of [...comments].reverse()) {
+                const b = c.body || '';
+                if (b.includes('Implementation Started') && b.includes('Feature PR:')) {
+                  const prMatch   = b.match(/\*\*Feature PR:\*\*\s*#(\d+)/);
+                  const specMatch = b.match(/\*\*Spec directory:\*\*\s*`([^`]+)`/);
+                  if (prMatch && specMatch) {
+                    featurePRNumber = prMatch[1];
+                    specDirectory   = specMatch[1];
+                    const suffix    = specDirectory.replace(/^specs\//, '');
+                    featureBranch   = `implement/${suffix}`;
+                    break outer;
+                  }
+                }
+              }
+              page++;
+            }
+
+            if (!featurePRNumber) {
+              core.setFailed('Could not find Implementation Started comment with Feature PR on feature issue. Cannot chain audit.');
+              return;
+            }
+
+            // Guard against manual issue closes: verify the feature PR has an APPROVED review
+            const { data: reviews } = await github.rest.pulls.listReviews({
+              owner, repo, pull_number: Number(featurePRNumber),
+            });
+            const hasApproval = reviews.some(r => r.state === 'APPROVED');
+            if (!hasApproval) {
+              core.info('Feature PR has no APPROVED review — this may be a manual close rather than an agent-approved audit. Skipping chain advancement.');
+              core.setOutput('skip_chain', 'true');
+              return;
+            }
+
+            core.setOutput('skip_chain', 'false');
+
+            core.setOutput('feature_pr_number',      featurePRNumber);
+            core.setOutput('feature_branch',         featureBranch);
+            core.setOutput('spec_directory',         specDirectory);
+            core.setOutput('open_audit_count',       String(openAuditTasks.length));
+            core.setOutput('next_audit_issue_number', openAuditTasks.length > 0 ? String(openAuditTasks[0].number) : '');
+
+      - name: Dispatch next audit task
+        if: steps.parse.outputs.skip != 'true' && steps.context.outputs.skip_chain != 'true' && steps.context.outputs.open_audit_count != '0'
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const owner                  = context.repo.owner;
+            const repo                   = context.repo.repo;
+            const featureIssueNumber     = '${{ steps.parse.outputs.feature_issue_number }}';
+            const featurePRNumber        = '${{ steps.context.outputs.feature_pr_number }}';
+            const featureBranch          = '${{ steps.context.outputs.feature_branch }}';
+            const specDirectory          = '${{ steps.context.outputs.spec_directory }}';
+            const nextAuditIssueNumber   = '${{ steps.context.outputs.next_audit_issue_number }}';
+
+            core.info(`Dispatching audit for next open audit task #${nextAuditIssueNumber}.`);
+            await github.rest.actions.createWorkflowDispatch({
+              owner, repo,
+              workflow_id: 'audit-dispatch.yml',
+              ref: 'main',
+              inputs: {
+                feature_issue_number:     featureIssueNumber,
+                feature_pr_number:        featurePRNumber,
+                feature_branch:           featureBranch,
+                audit_task_issue_number:  nextAuditIssueNumber,
+                spec_directory:           specDirectory,
+                first_audit:              'false',
+              },
+            });
+
+      - name: Mark feature PR ready for human merge
+        if: steps.parse.outputs.skip != 'true' && steps.context.outputs.skip_chain != 'true' && steps.context.outputs.open_audit_count == '0'
+        uses: actions/github-script@v8
+        with:
+          github-token: ${{ secrets.GH_AW_AGENT_TOKEN }}
+          script: |
+            const owner              = context.repo.owner;
+            const repo               = context.repo.repo;
+            const featureIssueNumber = Number('${{ steps.parse.outputs.feature_issue_number }}');
+            const featurePRNumber    = Number('${{ steps.context.outputs.feature_pr_number }}');
+
+            // Collect audit task results from sub-issues
+            let subIssues = [];
+            try {
+              const { data } = await github.request(
+                'GET /repos/{owner}/{repo}/issues/{issue_number}/sub_issues',
+                { owner, repo, issue_number: featureIssueNumber }
+              );
+              subIssues = data || [];
+            } catch (e) {
+              core.warning(`Could not fetch sub-issues for summary: ${e.message}`);
+            }
+
+            const closedAuditTasks = subIssues.filter(si =>
+              si.labels?.some(l => l.name === 'agentic-flow-audit') && si.state === 'closed'
+            );
+
+            const auditSummary = closedAuditTasks.map(i => `- ✅ #${i.number}: ${i.title}`).join('\n') || '_No audit tasks_';
+
+            // Mark feature PR as non-draft (ready for review)
+            try {
+              await github.rest.pulls.update({
+                owner, repo, pull_number: featurePRNumber, draft: false,
+              });
+            } catch (e) {
+              core.warning(`Could not un-draft feature PR: ${e.message}`);
+            }
+
+            // Apply implementation-complete label to feature issue
+            try {
+              await github.rest.issues.addLabels({
+                owner, repo, issue_number: featureIssueNumber, labels: ['implementation-complete'],
+              });
+            } catch (e) {
+              core.warning(`Could not add implementation-complete label: ${e.message}`);
+            }
+
+            // Summary comment on feature issue
+            await github.rest.issues.createComment({
+              owner, repo, issue_number: featureIssueNumber,
+              body: [
+                '## 🎉 All Audits Complete — Ready for Human Merge',
+                '',
+                'All audit tasks have been reviewed and approved.',
+                '',
+                '### Completed Audits',
+                auditSummary,
+                '',
+                `**Feature PR #${featurePRNumber}** is ready for human review and merge to \`main\`.`,
+                '',
+                '_agentic-flow implementation pipeline_',
+              ].join('\n'),
+            });
+
+            // Comment on feature PR to prompt human
+            await github.rest.issues.createComment({
+              owner, repo, issue_number: featurePRNumber,
+              body: [
+                '## 🎉 All Audits Complete — Ready for Human Review',
+                '',
+                'All implementation tasks have been merged and all audit tasks have been reviewed and approved.',
+                '',
+                '### Completed Audits',
+                auditSummary,
+                '',
+                'This PR is ready for human review and merge to `main`.',
+                '',
+                '_agentic-flow implementation pipeline_',
+              ].join('\n'),
+            });

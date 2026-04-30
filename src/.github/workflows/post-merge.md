@@ -417,6 +417,21 @@ safe-outputs:
                 ].join("\n").trim(),
               });
 
+              // --- Machine-readable implement-ready block for implement-trigger ---
+              await github.rest.issues.createComment({
+                owner, repo,
+                issue_number: featureIssueNumber,
+                body: [
+                  "<!-- agentic-flow-implement-ready",
+                  `Merge commit: ${process.env.MERGE_COMMIT_SHA || ""}`,
+                  `Spec directory: ${specDirectory}`,
+                  `PR number: ${prNumber}`,
+                  "-->",
+                  "",
+                  "<!-- This comment is machine-readable. Do not edit. -->",
+                ].join("\n"),
+              });
+
               // --- Label cleanup: only when all tasks created and linked successfully ---
               if (failures.length === 0) {
                 const pipelineLabels = [

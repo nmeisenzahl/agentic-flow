@@ -1,0 +1,81 @@
+name: Audit Dispatch
+
+on:
+  workflow_dispatch:
+    inputs:
+      feature_issue_number:
+        description: 'Feature issue number'
+        required: true
+      feature_pr_number:
+        description: 'Feature PR number'
+        required: true
+      audit_task_issue_number:
+        description: 'Audit task issue number'
+        required: true
+      spec_directory:
+        description: 'Spec directory (e.g. specs/001-my-feature)'
+        required: true
+      first_audit:
+        description: 'Set true to un-draft the feature PR before assigning audit agent'
+        required: false
+        default: 'false'
+
+concurrency:
+  group: audit-dispatch-${{ github.event.inputs.audit_task_issue_number }}
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    name: Un-draft feature PR (if first audit) and assign audit agent
+    runs-on: ubuntu-latest
+    environment: copilot
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate audit task and un-draft feature PR
+        id: prep
+        uses: actions/github-script@v8
+        with:
+          github-token: ${{ secrets.GH_AW_AGENT_TOKEN }}
+          script: |
+            const owner = context.repo.owner;
+            const repo  = context.repo.repo;
+
+            const featurePR  = parseInt('${{ github.event.inputs.feature_pr_number }}');
+            const auditIssue = parseInt('${{ github.event.inputs.audit_task_issue_number }}');
+            const firstAudit = '${{ github.event.inputs.first_audit }}' === 'true';
+
+            // ── Validate audit task is open before mutating any state ────────────
+            const { data: issue } = await github.rest.issues.get({ owner, repo, issue_number: auditIssue });
+            if (issue.state !== 'open') {
+              core.warning(`Audit task issue #${auditIssue} is already closed — skipping dispatch.`);
+              core.setOutput('skip', 'true');
+              return;
+            }
+
+            // ── Un-draft feature PR only once dispatch is confirmed ───────────────
+            if (firstAudit) {
+              core.info(`First audit run — un-drafting feature PR #${featurePR}`);
+              await github.rest.pulls.update({ owner, repo, pull_number: featurePR, draft: false });
+              core.info(`Feature PR #${featurePR} is now ready for review.`);
+            }
+
+            core.setOutput('skip', 'false');
+
+      - name: Assign audit agent to feature PR
+        if: steps.prep.outputs.skip != 'true'
+        uses: ./.github/actions/assign-pr-agent
+        with:
+          stage-name: audit
+          agent-name: agentic-flow-audit
+          context-source: direct
+          pull-number: ${{ github.event.inputs.feature_pr_number }}
+          feature-issue-number: ${{ github.event.inputs.feature_issue_number }}
+          spec-directory: ${{ github.event.inputs.spec_directory }}
+          task-issue-number: ${{ github.event.inputs.audit_task_issue_number }}
+          agent-token: ${{ secrets.GH_AW_AGENT_TOKEN }}
