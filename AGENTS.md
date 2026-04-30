@@ -113,6 +113,8 @@ developed using spec-kit locally via the specify slash commands.
 | Audit tasks as feature PR reviews (not implementations) | Audit task issues (labeled `agentic-flow-audit`) are dispatched to `agentic-flow-audit` which reviews the **entire feature branch diff** (not individual task changes). This gives the auditor the full picture and produces a single PR review comment rather than per-task reviews. |
 | APPROVE closes audit issue; REQUEST_CHANGES leaves it open | The audit chain (next audit dispatch or ready-to-merge) is triggered by issue close events. Only APPROVE closes the audit task issue. REQUEST_CHANGES leaves it open, blocking the chain until the human fixes issues and posts `/rerun-audit`. |
 | Implementation and audit dispatch workflows use standard GHA YAML | Unlike `spec.md`, `plan.md`, etc., the implementation/audit orchestration is pure GHA JavaScript — no `gh aw` agentic workflow needed. The agent assignment step still uses the `assign-pr-agent` composite action for consistency. |
+| No automatic reconciliation for partial-success pipeline failures | If a task PR merges but a downstream step (close issue, dispatch next) fails, the pipeline stalls. Recovery is manual: inspect feature issue sub-issues and re-run the failed workflow. A dedicated reconciliation workflow is a planned future enhancement. |
+| No watchdog for silent agent timeouts | If an agent session fails to apply `ready-to-merge-task` or close an audit issue, the pipeline hangs. Manual recovery via `/rerun-audit` (audit) or workflow re-run (implementation). Scheduled timeout detection is a planned future enhancement. |
 
 ---
 
