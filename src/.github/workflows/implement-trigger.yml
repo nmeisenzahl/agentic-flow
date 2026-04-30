@@ -61,9 +61,6 @@ jobs:
               if (comments.length === 0) break;
               for (const comment of [...comments].reverse()) {
                 const body = comment.body || '';
-                // Only trust comments from bot accounts (github-actions[bot], etc.)
-                const authorLogin = comment.user?.login || '';
-                if (!authorLogin.endsWith('[bot]')) continue;
                 if (!body.includes('<!-- agentic-flow-implement-ready')) continue;
                 const mergeMatch = body.match(/Merge commit:\s*([0-9a-f]{40})/);
                 const specMatch  = body.match(/Spec directory:\s*(specs\/[^\s\n]+)/);
