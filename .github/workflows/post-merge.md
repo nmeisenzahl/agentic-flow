@@ -63,7 +63,7 @@ safe-outputs:
             PR_NUMBER: ${{ inputs.pr_number }}
             MERGE_COMMIT_SHA: ${{ inputs.merge_commit_sha }}
           with:
-            github-token: ${{ secrets.GH_AW_GITHUB_TOKEN || github.token }}
+            github-token: ${{ secrets.GH_AW_AGENT_TOKEN || secrets.GH_AW_GITHUB_TOKEN || github.token }}
             script: |
               const fail = message => { throw new Error(message); };
               const owner = context.repo.owner;
