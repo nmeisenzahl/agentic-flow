@@ -2,13 +2,11 @@
 
 > Spec-driven development, fully automated — from raw idea to merged pull request.
 
-agentic-flow is a drop-in framework for GitHub repositories that turns GitHub Copilot, GitHub Actions, and [spec-kit](https://github.com/github/spec-kit) into a self-driving development pipeline. You open an issue. Agents triage, research, spec, plan, and break it into tasks — with human approval gates at each phase transition.
+agentic-flow is a drop-in framework for GitHub repositories that turns GitHub Copilot, GitHub Actions, and [spec-kit](https://github.com/github/spec-kit) into a self-driving development pipeline. You open an issue. Agents triage, research, spec, plan, break it into tasks, implement each task, audit the result — and present a ready-to-merge PR for human sign-off.
 
 ```
-Issue → Triage → Research → Spec → Plan → Tasks → [Implementation → Review → Merge]
+Issue → Triage → Research → Spec → Plan → Tasks → Implementation → Audit → Human Merge
 ```
-
-> `[…]` = planned future phases, not yet implemented.
 
 No context-switching. No ticket grooming. Just ship.
 
@@ -24,11 +22,11 @@ Software teams spend more time coordinating work than doing it. agentic-flow rem
 2. Follow the setup guide in [`docs/README.md`](docs/README.md).
 3. Open a GitHub issue. The pipeline starts automatically.
 
-Human gates: answer clarifying questions → `/approve-spec` → `/approve-plan` → merge the spec PR. Everything else in the active phases is automated.
+Human gates: answer clarifying questions → `/approve-spec` → `/approve-plan` → merge the spec PR → review and merge the feature PR. Everything else is automated.
 
 Humans can jump in at any stage — comment on the spec PR, open a GitHub Codespace, work locally, or invoke agents and spec-kit commands directly. The pipeline picks up where you leave off.
 
-In adopter repos, `specify init . --ai copilot` provides the speckit phase/gate agents in `.github/agents/`. agentic-flow adds three wrapper agents — `agentic-flow-spec`, `agentic-flow-plan`, and `agentic-flow-tasks` — that keep the speckit flow on the already-assigned issue/PR branch instead of creating extra branches or PRs.
+In adopter repos, `specify init . --ai copilot` provides the speckit phase/gate agents in `.github/agents/`. agentic-flow adds five wrapper agents — `agentic-flow-spec`, `agentic-flow-plan`, `agentic-flow-tasks`, `agentic-flow-implement`, and `agentic-flow-audit` — that keep the speckit flow on the already-assigned issue/PR branch instead of creating extra branches or PRs.
 
 ## Pipeline at a glance
 
@@ -38,9 +36,9 @@ In adopter repos, `specify init . --ai copilot` provides the speckit phase/gate 
 - **Spec** — A formal spec is generated and reviewed.
 - **Plan** — Implementation approach is defined from the approved spec.
 - **Tasks** — Work is split into executable task issues.
-- **[Implementation]** — *(future)* Agents implement tasks in draft PRs.
-- **[Review]** — *(future)* Security, architecture, acceptance criteria, and coverage checks run.
-- **[Merge]** — *(future)* PR is reviewed and merged once all gates pass.
+- **Implementation** — Agents implement tasks sequentially on isolated branches; each task PR auto-merges into a feature branch when CI passes.
+- **Audit** — Agents review the accumulated feature PR against audit criteria (security, architecture, acceptance tests).
+- **Human Merge** — The feature PR is presented for human review and merge to `main`.
 
 ## Contributing
 
