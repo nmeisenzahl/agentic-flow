@@ -88,7 +88,6 @@ jobs:
         id: create-branch
         uses: actions/github-script@v8
         with:
-          github-token: ${{ secrets.GH_AW_AGENT_TOKEN }}
           script: |
             const owner      = context.repo.owner;
             const repo       = context.repo.repo;
@@ -108,7 +107,6 @@ jobs:
         id: create-pr
         uses: actions/github-script@v8
         with:
-          github-token: ${{ secrets.GH_AW_AGENT_TOKEN }}
           script: |
             const owner         = context.repo.owner;
             const repo          = context.repo.repo;
