@@ -84,6 +84,9 @@ jobs:
               if (comments.length === 0) break;
               for (const c of [...comments].reverse()) {
                 const b = c.body || '';
+                // Only trust comments from bot accounts
+                const authorLogin = c.user?.login || '';
+                if (!authorLogin.endsWith('[bot]')) continue;
                 if (b.includes('Implementation Started') && b.includes('Feature PR:')) {
                   const prMatch   = b.match(/\*\*Feature PR:\*\*\s*#(\d+)/);
                   const specMatch = b.match(/\*\*Spec directory:\*\*\s*`([^`]+)`/);
@@ -104,13 +107,20 @@ jobs:
               return;
             }
 
-            // Guard against manual issue closes: verify the feature PR has an APPROVED review
-            const { data: reviews } = await github.rest.pulls.listReviews({
-              owner, repo, pull_number: Number(featurePRNumber),
+            // Guard against manual issue closes: verify the audit agent posted an APPROVE
+            // context block specifically for THIS audit task (not a prior audit)
+            const closedAuditNumber = context.issue.number;
+            const { data: prComments } = await github.rest.issues.listComments({
+              owner, repo, issue_number: Number(featurePRNumber), per_page: 100,
             });
-            const hasApproval = reviews.some(r => r.state === 'APPROVED');
-            if (!hasApproval) {
-              core.info('Feature PR has no APPROVED review — this may be a manual close rather than an agent-approved audit. Skipping chain advancement.');
+            const auditApproved = prComments.some(c => {
+              const body = c.body || '';
+              return body.includes('agentic-flow-context') &&
+                     body.includes(`Audit task issue: #${closedAuditNumber}`) &&
+                     body.includes('Audit result: APPROVE');
+            });
+            if (!auditApproved) {
+              core.info(`No agentic-flow audit APPROVE context block found for audit issue #${closedAuditNumber} on feature PR #${featurePRNumber}. Skipping chain advancement.`);
               core.setOutput('skip_chain', 'true');
               return;
             }

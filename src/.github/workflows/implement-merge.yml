@@ -108,19 +108,29 @@ jobs:
             if (failed.length > 0) {
               const failedNames = failed.map(r => r.name).join(', ');
               core.warning(`CI checks failed on PR #${taskPRNumber}: ${failedNames}`);
-              // Post a failure comment so humans can see the issue
-              await github.rest.issues.createComment({
-                owner, repo, issue_number: taskPRNumber,
-                body: [
-                  '## ❌ Task PR — CI Failed',
-                  '',
-                  `The following checks failed: **${failedNames}**`,
-                  '',
-                  'The task PR cannot be auto-merged until all checks pass.',
-                  '',
-                  '_agentic-flow implementation pipeline_',
-                ].join('\n'),
+
+              // Dedup: only post one CI failure comment per head SHA
+              const ciFailMarker = `<!-- agentic-flow-ci-fail:${headSha} -->`;
+              const { data: existingComments } = await github.rest.issues.listComments({
+                owner, repo, issue_number: taskPRNumber, per_page: 100,
               });
+              const alreadyPosted = existingComments.some(c => (c.body || '').includes(ciFailMarker));
+
+              if (!alreadyPosted) {
+                await github.rest.issues.createComment({
+                  owner, repo, issue_number: taskPRNumber,
+                  body: [
+                    ciFailMarker,
+                    '## ❌ Task PR — CI Failed',
+                    '',
+                    `The following checks failed: **${failedNames}**`,
+                    '',
+                    'The task PR cannot be auto-merged until all checks pass.',
+                    '',
+                    '_agentic-flow implementation pipeline_',
+                  ].join('\n'),
+                });
+              }
               core.setOutput('skip', 'true');
               return;
             }
@@ -173,6 +183,11 @@ jobs:
               commit_title: `${pr.title} (#${taskPRNumber})`,
               commit_message: `Auto-merged by agentic-flow implement-merge workflow.\n\nTask: #${{ steps.resolve.outputs.task_issue_number }}\nFeature: #${{ steps.resolve.outputs.feature_issue_number }}`,
             });
+
+            if (!merge.merged) {
+              core.setFailed(`Merge API returned merged=false for PR #${taskPRNumber}: ${merge.message}`);
+              return;
+            }
 
             core.info(`Merged task PR #${taskPRNumber}: ${merge.message}`);
             core.setOutput('merged', 'true');
