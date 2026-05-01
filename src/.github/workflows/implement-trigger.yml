@@ -2,28 +2,34 @@ name: Implement Trigger (agentic-flow)
 on:
   issues:
     types: [labeled]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: 'Feature issue number to trigger implementation for'
+        required: true
+        type: string
 
 permissions:
   contents: write
   issues: write
   pull-requests: write
   actions: write
-  workflows: write
 
 concurrency:
-  group: implement-trigger-${{ github.event.issue.number }}
+  group: implement-trigger-${{ github.event.issue.number || inputs.issue_number }}
   cancel-in-progress: false
 
 jobs:
   trigger-implementation:
-    if: github.event.label.name == 'tasks-created' && !contains(github.event.issue.labels.*.name, 'implementing')
+    if: >-
+      (github.event_name == 'workflow_dispatch') ||
+      (github.event.label.name == 'tasks-created' && !contains(github.event.issue.labels.*.name, 'implementing'))
     runs-on: ubuntu-latest
     permissions:
       contents: write
       issues: write
       pull-requests: write
       actions: write
-      workflows: write
     steps:
       - name: Ensure implementation labels exist
         uses: actions/github-script@v8
@@ -50,7 +56,9 @@ jobs:
           script: |
             const owner = context.repo.owner;
             const repo  = context.repo.repo;
-            const issueNumber = context.issue.number;
+            const issueNumber = context.eventName === 'workflow_dispatch'
+              ? parseInt(context.payload.inputs.issue_number, 10)
+              : context.issue.number;
 
             let mergeCommit  = '';
             let specDirectory = '';
@@ -81,6 +89,7 @@ jobs:
             }
 
             const branchSuffix = specDirectory.replace(/^specs\//, '');
+            core.setOutput('issue_number',   String(issueNumber));
             core.setOutput('merge_commit',   mergeCommit);
             core.setOutput('spec_directory', specDirectory);
             core.setOutput('feature_branch', `implement/${branchSuffix}`);
@@ -113,7 +122,7 @@ jobs:
             const owner         = context.repo.owner;
             const repo          = context.repo.repo;
             const featureBranch = '${{ steps.context.outputs.feature_branch }}';
-            const issueNumber   = context.issue.number;
+            const issueNumber   = parseInt('${{ steps.context.outputs.issue_number }}', 10);
             const specDirectory = '${{ steps.context.outputs.spec_directory }}';
 
             const { data: existing } = await github.rest.pulls.list({
@@ -156,7 +165,7 @@ jobs:
             await github.rest.issues.addLabels({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: context.issue.number,
+              issue_number: parseInt('${{ steps.context.outputs.issue_number }}', 10),
               labels: ['implementing'],
             });
 
@@ -166,7 +175,7 @@ jobs:
           script: |
             const owner         = context.repo.owner;
             const repo          = context.repo.repo;
-            const issueNumber   = context.issue.number;
+            const issueNumber   = parseInt('${{ steps.context.outputs.issue_number }}', 10);
             const featurePR     = '${{ steps.create-pr.outputs.pr_number }}';
             const specDirectory = '${{ steps.context.outputs.spec_directory }}';
 
@@ -211,7 +220,7 @@ jobs:
           script: |
             const owner         = context.repo.owner;
             const repo          = context.repo.repo;
-            const issueNumber   = context.issue.number;
+            const issueNumber   = parseInt('${{ steps.context.outputs.issue_number }}', 10);
             const featurePR     = '${{ steps.create-pr.outputs.pr_number }}';
             const featureBranch = '${{ steps.context.outputs.feature_branch }}';
             const specDirectory = '${{ steps.context.outputs.spec_directory }}';
