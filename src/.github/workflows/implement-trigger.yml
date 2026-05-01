@@ -8,6 +8,7 @@ permissions:
   issues: write
   pull-requests: write
   actions: write
+  workflows: write
 
 concurrency:
   group: implement-trigger-${{ github.event.issue.number }}
@@ -22,6 +23,7 @@ jobs:
       issues: write
       pull-requests: write
       actions: write
+      workflows: write
     steps:
       - name: Ensure implementation labels exist
         uses: actions/github-script@v8
