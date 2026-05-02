@@ -14,7 +14,6 @@ permissions:
   issues: write
   pull-requests: write
   actions: write
-  workflows: write
 
 concurrency:
   group: implement-trigger-${{ github.event.issue.number || inputs.issue_number }}
@@ -31,7 +30,6 @@ jobs:
       issues: write
       pull-requests: write
       actions: write
-      workflows: write
     steps:
       - name: Ensure implementation labels exist
         uses: actions/github-script@v8
@@ -101,7 +99,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ github.token }}
+          token: ${{ secrets.GH_AW_AGENT_TOKEN }}
 
       - name: Create feature branch
         id: create-branch
