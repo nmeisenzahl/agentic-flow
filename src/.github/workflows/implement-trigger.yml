@@ -95,24 +95,25 @@ jobs:
             core.setOutput('feature_branch', `implement/${branchSuffix}`);
             core.setOutput('branch_suffix',  branchSuffix);
 
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ github.token }}
+
       - name: Create feature branch
         id: create-branch
-        uses: actions/github-script@v8
-        with:
-          script: |
-            const owner      = context.repo.owner;
-            const repo       = context.repo.repo;
-            const branchName = '${{ steps.context.outputs.feature_branch }}';
-            const sha        = '${{ steps.context.outputs.merge_commit }}';
-
-            try {
-              await github.rest.git.getRef({ owner, repo, ref: `heads/${branchName}` });
-              core.info(`Branch ${branchName} already exists; skipping creation.`);
-            } catch (e) {
-              if (e.status !== 404) throw e;
-              await github.rest.git.createRef({ owner, repo, ref: `refs/heads/${branchName}`, sha });
-              core.info(`Created branch ${branchName} at ${sha}.`);
-            }
+        run: |
+          BRANCH="${{ steps.context.outputs.feature_branch }}"
+          SHA="${{ steps.context.outputs.merge_commit }}"
+          if git ls-remote --exit-code --heads origin "$BRANCH" > /dev/null 2>&1; then
+            echo "Branch $BRANCH already exists; skipping creation."
+          else
+            git fetch origin
+            git checkout -b "$BRANCH" "$SHA"
+            git push origin "$BRANCH"
+            echo "Created branch $BRANCH at $SHA."
+          fi
 
       - name: Open draft feature PR
         id: create-pr
