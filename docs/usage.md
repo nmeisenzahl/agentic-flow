@@ -127,7 +127,7 @@ Re-run from the GitHub Actions UI (dispatch the **Create Task Issues** workflow)
 | `/refine-spec` rejected | Verify open spec PR exists and `plan.md` is NOT yet on the branch |
 | `/approve-spec` rejected | Verify `spec.md` exists on the spec PR's branch and command was posted on the spec PR |
 | `/approve-plan` rejected | Verify both `spec.md` and `plan.md` exist on the branch and command was posted on the spec PR |
-| Implementation doesn't start after `tasks-created` | Verify `implement-trigger.yml` is deployed; check that the post-merge workflow posted the `<!-- agentic-flow-implement-ready -->` block to the feature issue; verify `GH_AW_AGENT_TOKEN` secret has `actions: write` |
+| Implementation doesn't start after `tasks-created` | Verify `implement-trigger.yml` is deployed; check that the post-merge workflow posted the `<!-- agentic-flow-implement-ready -->` block to the feature issue; verify `GH_AW_AGENT_TOKEN` secret has `actions: write` and **`workflow` scope** (Workflows: Write permission for fine-grained PATs — required to push the feature branch which contains workflow files) |
 | Task implementation agent never starts | Verify `implement-dispatch.yml` dispatched; check that `agentic-flow-implement.agent.md` is deployed and `COPILOT_MCP_GITHUB_WRITE_TOKEN` is in the `copilot` environment |
 | Task PR not auto-merging | Verify `implement-merge.yml` is deployed; check CI status on the task PR; verify `ready-to-merge-task` label was applied by the agent |
 | Audit doesn't start after all tasks merged | Verify `audit-dispatch.yml` is deployed; check feature issue sub-issues include open `agentic-flow-audit` tasks |

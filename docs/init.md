@@ -149,7 +149,9 @@ This same token is also used as the underlying PAT for `COPILOT_MCP_GITHUB_WRITE
 1. Go to **Settings → Developer settings → Personal access tokens → Fine-grained tokens**
 2. Click **Generate new token**
 3. Scope the token to this repository
-4. Grant **Repository permissions**: Actions (Write), Contents (Write), Issues (Write), Pull requests (Write)
+4. Grant **Repository permissions**: Actions (Write), Contents (Write), Issues (Write), Pull requests (Write), Workflows (Write)
+
+> **Workflows permission is required.** `implement-trigger.yml` pushes the feature branch which contains `.github/workflows/` files. GitHub blocks any token — including GITHUB_TOKEN — from pushing branches that touch workflow files unless it explicitly has the `workflow` scope (classic PAT) or "Workflows: Read and write" (fine-grained PAT). Without this permission, feature branch creation fails with `refusing to allow a Personal Access Token to create or update workflow ... without workflow scope`.
 
 **Add to repository**:
 

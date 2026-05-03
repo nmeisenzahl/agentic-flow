@@ -1,4 +1,4 @@
-name: Audit Dispatch
+name: Audit Dispatch (agentic-flow)
 
 on:
   workflow_dispatch:
