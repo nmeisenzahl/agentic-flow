@@ -111,6 +111,9 @@ jobs:
           else
             git fetch origin
             git checkout -b "$BRANCH" "$SHA"
+            git config user.name "${{ github.actor }}"
+            git config user.email "${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com"
+            git commit --allow-empty -m "chore: initialise implementation feature branch"
             git push origin "$BRANCH"
             echo "Created branch $BRANCH at $SHA."
           fi
@@ -227,6 +230,8 @@ jobs:
             });
 
       - name: Find first ready task and dispatch
+        env:
+          SUB_ISSUES_JSON: ${{ steps.post-started.outputs.sub_issues_json }}
         uses: actions/github-script@v9
         with:
           script: |
@@ -240,7 +245,7 @@ jobs:
             // Re-use sub-issues fetched in the post-started step (avoids duplicate API call)
             let subIssues = [];
             try {
-              const raw = '${{ steps.post-started.outputs.sub_issues_json }}';
+              const raw = process.env.SUB_ISSUES_JSON;
               subIssues = raw ? JSON.parse(raw) : [];
             } catch (e) {
               core.setFailed(`Could not parse sub-issues from post-started output: ${e.message}`);

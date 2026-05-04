@@ -87,6 +87,37 @@ jobs:
               return;
             }
 
+            // Guard: when triggered by the labeled event, wait for Copilot's completion
+            // comment before proceeding. The agent sometimes applies the label before
+            // posting the comment, causing a race condition where the PR is merged before
+            // the completion summary is recorded.
+            // The startup comment (posted by the workflow token) also contains
+            // <!-- agentic-flow-context --> + Phase: implement, so we discriminate by
+            // requiring the comment to come from the Copilot SWE agent login.
+            if (context.eventName === 'pull_request') {
+              const isCopilotLogin = login =>
+                typeof login === 'string' && /^(copilot|copilot-swe-agent)(\[bot\])?$/i.test(login.trim());
+              let hasCompletionComment = false;
+              for (let attempt = 0; attempt < 6; attempt++) {
+                const comments = await github.paginate(github.rest.issues.listComments, {
+                  owner, repo, issue_number: taskPRNumber, per_page: 100,
+                });
+                // Just check that the Copilot agent posted any comment — it may not
+                // include the agentic-flow-context block verbatim in its completion reply.
+                hasCompletionComment = comments.some(c => isCopilotLogin(c.user?.login));
+                if (hasCompletionComment) break;
+                if (attempt < 5) {
+                  core.info(`Copilot completion comment not yet posted (attempt ${attempt + 1}/6); waiting 10s...`);
+                  await new Promise(resolve => setTimeout(resolve, 10000));
+                }
+              }
+              if (!hasCompletionComment) {
+                core.info(`PR #${taskPRNumber} has no Copilot completion comment after waiting; skipping merge.`);
+                core.setOutput('skip', 'true');
+                return;
+              }
+            }
+
             // Check mergeability via GraphQL (no conflicts) + check runs (no CI failures).
             // Avoid mergeStateStatus — GitHub marks it UNSTABLE when the Commit Status API
             // returns 'pending' with 0 entries (happens in repos with no legacy CI config).
@@ -113,9 +144,9 @@ jobs:
 
             // Use a pass allowlist (not a failure denylist) to correctly handle pending/in-progress
             // checks — don't merge until ALL relevant checks have completed successfully.
-            // Filter out this workflow's own check suite to avoid self-blocking.
-            // The check run job name ('merge-task-pr') differs from the workflow name,
-            // so we use the check_suite_id to reliably identify and exclude our own run.
+            // Filter out this workflow's own check suite to avoid self-blocking, AND exclude
+            // stale check runs from previous retries of this same workflow (identified by job name).
+            // Previous failed runs remain on the SHA's check-run list and must not block retries.
             const headSha = pr.head.sha;
             const { data: runData } = await github.rest.actions.getWorkflowRun({
               owner, repo, run_id: context.runId,
@@ -124,8 +155,10 @@ jobs:
             const { data: checkRuns } = await github.rest.checks.listForRef({
               owner, repo, ref: headSha, per_page: 100,
             });
+            const selfJobNames = new Set(['merge-task-pr']);
             const relevantChecks = checkRuns.check_runs.filter(c =>
-              !c.check_suite || c.check_suite.id !== ownCheckSuiteId
+              (!c.check_suite || c.check_suite.id !== ownCheckSuiteId) &&
+              !selfJobNames.has(c.name)
             );
             if (relevantChecks.length > 0) {
               const pendingChecks = relevantChecks.filter(c => c.status !== 'completed');
@@ -137,6 +170,7 @@ jobs:
               const passConclusions = new Set(['success', 'neutral', 'skipped']);
               const failedChecks = relevantChecks.filter(c => !passConclusions.has(c.conclusion));
               if (failedChecks.length > 0) {
+                core.info(`CI checks failed: ${failedChecks.map(c => `${c.name}: ${c.conclusion}`).join(', ')}`);
                 const ciFailMarker = `<!-- agentic-flow-ci-fail:${headSha} -->`;
                 const { data: existingComments } = await github.rest.issues.listComments({
                   owner, repo, issue_number: taskPRNumber, per_page: 100,
@@ -170,17 +204,66 @@ jobs:
             const taskIssueMatch    = body.match(/\*\*Task issue:\*\*\s*#(\d+)/);
             const specDirMatch      = body.match(/\*\*Spec directory:\*\*\s*`([^`]+)`/);
 
-            if (!featureIssueMatch || !featurePRMatch || !taskIssueMatch || !specDirMatch) {
-              core.setFailed(`Could not parse required context from PR #${taskPRNumber} body. Expected Feature issue, Feature PR, Task issue, Spec directory fields.`);
-              return;
+            let featureIssueNum, featurePRNum, taskIssueNum, specDir;
+
+            if (featureIssueMatch && featurePRMatch && taskIssueMatch && specDirMatch) {
+              featureIssueNum = featureIssueMatch[1];
+              featurePRNum    = featurePRMatch[1];
+              taskIssueNum    = taskIssueMatch[1];
+              specDir         = specDirMatch[1];
+            } else {
+              // Agent overwrote the PR body — derive context from branch names + lookups
+              core.info(`PR #${taskPRNumber} body missing structured context; deriving from branches.`);
+
+              const featureBranchDerived = pr.base.ref; // implement/NNN-...
+              specDir = 'specs/' + featureBranchDerived.replace(/^implement\//, '');
+
+              // Find the open feature PR (featureBranch → main)
+              const { data: featurePRList } = await github.rest.pulls.list({
+                owner, repo, head: `${owner}:${featureBranchDerived}`, base: 'main', state: 'open',
+              });
+              if (featurePRList.length === 0) {
+                core.setFailed(`Could not derive context: no open feature PR found for branch ${featureBranchDerived}.`);
+                return;
+              }
+              const featurePRItem = featurePRList[0];
+              featurePRNum = String(featurePRItem.number);
+
+              const featureIssueInPR = (featurePRItem.body || '').match(/\*\*Feature issue:\*\*\s*#(\d+)/);
+              if (!featureIssueInPR) {
+                core.setFailed(`Could not derive feature issue number from feature PR #${featurePRItem.number} body.`);
+                return;
+              }
+              featureIssueNum = featureIssueInPR[1];
+
+              // Derive task issue: parse task ID from branch name, match against sub-issues
+              const taskIdFromBranch = pr.head.ref.match(/\/(T\d+)$/)?.[1];
+              if (taskIdFromBranch) {
+                try {
+                  const { data: subIssues } = await github.request(
+                    'GET /repos/{owner}/{repo}/issues/{issue_number}/sub_issues',
+                    { owner, repo, issue_number: parseInt(featureIssueNum) }
+                  );
+                  const match = (subIssues || []).find(si =>
+                    si.title.startsWith(taskIdFromBranch + ':') || si.title.startsWith(taskIdFromBranch + ' ')
+                  );
+                  if (match) taskIssueNum = String(match.number);
+                } catch (e) {
+                  core.warning(`Sub-issue lookup failed: ${e.message}`);
+                }
+              }
+              if (!taskIssueNum) {
+                core.setFailed(`Could not derive task issue number for branch ${pr.head.ref}.`);
+                return;
+              }
             }
 
             core.setOutput('skip',                 'false');
             core.setOutput('task_pr_number',       String(taskPRNumber));
-            core.setOutput('feature_issue_number', featureIssueMatch[1]);
-            core.setOutput('feature_pr_number',    featurePRMatch[1]);
-            core.setOutput('task_issue_number',    taskIssueMatch[1]);
-            core.setOutput('spec_directory',       specDirMatch[1]);
+            core.setOutput('feature_issue_number', featureIssueNum);
+            core.setOutput('feature_pr_number',    featurePRNum);
+            core.setOutput('task_issue_number',    taskIssueNum);
+            core.setOutput('spec_directory',       specDir);
             core.setOutput('feature_branch',       pr.base.ref);
             core.setOutput('task_branch',          pr.head.ref);
             core.setOutput('head_sha',             pr.head.sha);

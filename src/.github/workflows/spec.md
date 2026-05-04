@@ -10,6 +10,8 @@ permissions:
 
 safe-outputs:
   report-failure-as-issue: false
+  noop:
+    report-as-issue: false
   create-issue: null
   add-comment: null
   add-labels:

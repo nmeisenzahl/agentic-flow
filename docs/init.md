@@ -55,7 +55,45 @@ In **repository Settings → Copilot → Cloud agent**:
 
 - **Enable coding agent** for this repository
 - **"Require approval for workflow runs":** disabled (agents run on demand via slash commands, so no need for manual workflow approvals)
-- **Firewall / allowed tools:** ensure `create_issue`, `add_sub_issue`, `create_or_update_file` are not blocked
+
+### Firewall
+
+The Copilot cloud agent firewall controls which external domains the agent can reach during a session. You have two options:
+
+#### Option A — Disable the firewall (simplest)
+
+Turn off **"Enable firewall"** in the Cloud agent settings. The agent gets unrestricted internet access. This is the easiest setup but may increase data exfiltration risk — only appropriate for non-sensitive repositories.
+
+#### Option B — Keep the firewall enabled with an allowlist (recommended)
+
+Leave **"Enable firewall"** on and add only the domains your tasks actually need. This limits what the agent can reach and reduces exfiltration risk.
+
+Common domains to allowlist depending on your stack:
+
+| Domain | When needed |
+|--------|-------------|
+| `api.github.com` | Always — GitHub API calls |
+| `github.com` | Always — cloning, content fetching |
+| `objects.githubusercontent.com` | Always — downloading file content |
+| `go.dev` | Go projects — module proxy, documentation |
+| `pkg.go.dev` | Go projects — package documentation |
+| `proxy.golang.org` | Go projects — module downloads |
+| `sum.golang.org` | Go projects — checksum database |
+| `registry.npmjs.org` | Node.js projects |
+| `pypi.org` | Python projects |
+| `files.pythonhosted.org` | Python projects |
+
+In your workflow frontmatter (for agentic workflow `.md` files), you can also declare allowed domains per-workflow:
+
+```yaml
+network:
+  allowed:
+    - defaults
+    - "go.dev"
+    - "pkg.go.dev"
+```
+
+> **Tip:** Check the firewall warning block in agent run logs — it lists any domains the agent attempted to reach but was blocked from. Use that list to build your allowlist incrementally.
 
 ---
 

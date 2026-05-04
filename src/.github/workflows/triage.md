@@ -20,6 +20,8 @@ permissions:
 
 safe-outputs:
   report-failure-as-issue: false
+  noop:
+    report-as-issue: false
   update-issue:
     target: "*"
     body:
