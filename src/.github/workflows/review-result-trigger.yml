@@ -3,22 +3,41 @@ name: Review Result Trigger (agentic-flow)
 on:
   issue_comment:
     types: [created]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'Feature PR number'
+        required: true
+      audit_result:
+        description: 'APPROVE or REQUEST_CHANGES'
+        required: true
+        default: 'APPROVE'
+      feature_issue_number:
+        description: 'Feature issue number'
+        required: true
+      feature_branch:
+        description: 'Feature branch name (e.g. implement/056-slug)'
+        required: true
+      spec_directory:
+        description: 'Spec directory path (e.g. specs/056-slug)'
+        required: true
 
 concurrency:
-  group: review-result-trigger-${{ github.event.issue.number }}
+  group: review-result-trigger-${{ github.event.issue.number || inputs.pr_number }}
   cancel-in-progress: false
 
 jobs:
   handle-review-result:
     name: Handle review agent result comment
-    # Must be a bot comment on a PR, containing Phase: review but NOT Phase: review-fix
+    # Must be a bot comment on a PR with Phase: review + Audit result:, OR a manual workflow_dispatch
     if: >-
-      github.event.issue.pull_request != null &&
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.issue.pull_request != null &&
       (github.event.comment.user.type == 'Bot' || endsWith(github.event.comment.user.login, '[bot]')) &&
       contains(github.event.comment.body, 'Phase: review') &&
       !contains(github.event.comment.body, 'Phase: review-fix') &&
       contains(github.event.comment.body, 'Audit result:') &&
-      contains(github.event.comment.body, '<!-- agentic-flow-context')
+      contains(github.event.comment.body, '<!-- agentic-flow-context'))
     runs-on: ubuntu-latest
     environment: copilot
     permissions:
@@ -34,25 +53,36 @@ jobs:
         with:
           github-token: ${{ secrets.GH_AW_AGENT_TOKEN }}
           script: |
-            const owner    = context.repo.owner;
-            const repo     = context.repo.repo;
-            const prNumber = context.payload.issue.number;
-            const body     = context.payload.comment.body || '';
+            const owner = context.repo.owner;
+            const repo  = context.repo.repo;
 
-            // -- Parse context block fields --
-            const field = (name) => {
-              const m = body.match(new RegExp(`${name}:\\s*(.+)`, 'i'));
-              return m ? m[1].trim() : null;
-            };
+            let auditResult, featureIssueNum, featurePRNum, specDirectory, featureBranch;
 
-            const auditResult      = field('Audit result');
-            const featureIssueStr  = field('Feature issue');
-            const featurePRStr     = field('Feature PR');
-            const specDirectory    = field('Spec directory');
-            const featureBranch    = (field('Feature branch') || '').replace(/`/g, '').trim();
+            if (context.eventName === 'workflow_dispatch') {
+              // Manual trigger — read from workflow inputs
+              auditResult     = context.payload.inputs.audit_result;
+              featureIssueNum = parseInt(context.payload.inputs.feature_issue_number);
+              featurePRNum    = parseInt(context.payload.inputs.pr_number);
+              specDirectory   = context.payload.inputs.spec_directory;
+              featureBranch   = context.payload.inputs.feature_branch;
+            } else {
+              // Comment trigger — parse from context block
+              const prNumber = context.payload.issue.number;
+              const body     = context.payload.comment.body || '';
 
-            const featureIssueNum  = featureIssueStr  ? parseInt(featureIssueStr.replace('#', ''))  : null;
-            const featurePRNum     = featurePRStr     ? parseInt(featurePRStr.replace('#', ''))     : null;
+              const field = (name) => {
+                const m = body.match(new RegExp(`${name}:\\s*(.+)`, 'i'));
+                return m ? m[1].trim() : null;
+              };
+
+              auditResult     = field('Audit result');
+              const featureIssueStr = field('Feature issue');
+              const featurePRStr   = field('Feature PR');
+              specDirectory   = field('Spec directory');
+              featureBranch   = (field('Feature branch') || '').replace(/`/g, '').trim();
+              featureIssueNum = featureIssueStr ? parseInt(featureIssueStr.replace('#', '')) : null;
+              featurePRNum    = featurePRStr    ? parseInt(featurePRStr.replace('#', ''))    : prNumber;
+            }
 
             if (!auditResult || !featureIssueNum || !featurePRNum || !specDirectory) {
               core.setFailed('Missing required fields in review context block. Cannot advance pipeline.');

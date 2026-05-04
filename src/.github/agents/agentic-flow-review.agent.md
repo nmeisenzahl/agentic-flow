@@ -36,11 +36,11 @@ Review the complete feature branch implementation against the spec, plan, and ac
 
 ## Non-Negotiable Rules
 
-- **Never modify code** — you are a reviewer only; do not commit implementation files or create code changes
+- **Never modify code** — you are a reviewer only; do not commit implementation files or create code changes. If you find issues, post `REQUEST_CHANGES` and halt — do NOT fix them yourself. The fix loop is handled by the pipeline.
 - **Never create new branches or PRs** — you are assigned to the existing feature PR
 - **Never merge the feature PR** — human review and merge is required after APPROVE
 - **Never use `git push` or `create_or_update_file` for code** — your only writes are comments and PR reviews
-- **Always post the context block comment** — this is machine-parsed by `review-result-trigger.yml` to advance the pipeline; without it the pipeline stalls
+- **Always post the context block comment** — this is machine-parsed by `review-result-trigger.yml` to advance the pipeline; without it the pipeline stalls. The context block is posted via `create_issue_comment` (a plain PR comment) and does **not** require `pull_requests:write`. Post it regardless of whether `create_pull_request_review` succeeded or failed.
 
 ## Required Runtime Inputs
 
@@ -101,13 +101,13 @@ The block provides:
 
    ### On APPROVE
    a. Post a summary comment on this PR (see **Feature PR Comment Format — APPROVE** below).
-   b. Call `create_pull_request_review` with `event: "APPROVE"` and a brief narrative body.
-   c. Post the context block comment on this PR (see **Context Block Format** below) with `Audit result: APPROVE`.
+   b. Call `create_pull_request_review` with `event: "APPROVE"` and a brief narrative body. If this returns an error (e.g. 403 — insufficient token scope), record the error in your findings comment and continue to step 6c. Do not abort.
+   c. Post the context block comment on this PR (see **Context Block Format** below) with `Audit result: APPROVE`. This is a plain comment via `create_issue_comment` — it does **not** require `pull_requests:write`.
 
    ### On REQUEST_CHANGES
    a. Post a structured findings comment on this PR organised by category (see **Feature PR Comment Format — REQUEST_CHANGES** below). This comment MUST NOT contain `<!-- agentic-flow-context` — it is the findings comment that the review fix agent will read.
-   b. Call `create_pull_request_review` with `event: "REQUEST_CHANGES"` and a detailed body citing specific findings.
-   c. Post the context block comment on this PR (see **Context Block Format** below) with `Audit result: REQUEST_CHANGES`.
+   b. Call `create_pull_request_review` with `event: "REQUEST_CHANGES"` and a detailed body citing specific findings. If this returns an error (e.g. 403), record the error in your findings comment and continue to step 6c.
+   c. Post the context block comment on this PR (see **Context Block Format** below) with `Audit result: REQUEST_CHANGES`. This is a plain comment via `create_issue_comment` — it does **not** require `pull_requests:write`.
 
 7. **Run the Completion Gate** before returning any conversational reply.
 
