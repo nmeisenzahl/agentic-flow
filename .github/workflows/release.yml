@@ -56,11 +56,7 @@ jobs:
             [ -f "$f" ] || { echo "MISSING: $f"; exit 1; }
           done
 
-          # Validate docs/ (only files shipped in the release zip)
-          for f in "docs/README.md" "docs/init.md" "docs/usage.md"; do
-            [ -f "$f" ] || { echo "MISSING: $f"; exit 1; }
-          done
-
+          # Validate src/ key files
       - name: Validate shipped workflow sources compile
         env:
           GH_TOKEN: ${{ github.token }}
@@ -75,19 +71,13 @@ jobs:
           # or run: cp -r src/. /target-repo/
           # Exclude .lock.yml files — users compile their own after installation
           cd src && zip -r "../agentic-flow-${VERSION}.zip" . --exclude "*.lock.yml" && cd ..
-          # Append adopter docs — only README.md, init.md, usage.md ship in the zip
-          # docs/contributing.md is dev-only and excluded
-          zip -r "agentic-flow-${VERSION}.zip" \
-            docs/README.md \
-            docs/init.md \
-            docs/usage.md
 
       - name: Generate upgrading notes (FR-061a)
         id: upgrading
         run: |
           PREV=$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || echo "")
           if [ -n "$PREV" ]; then
-            CHANGED=$(git diff --name-only "$PREV".."$GITHUB_REF_NAME" | grep -E '^src/|^docs/' || true)
+            CHANGED=$(git diff --name-only "$PREV".."$GITHUB_REF_NAME" | grep -E '^src/' || true)
             echo "notes<<EOF" >> $GITHUB_OUTPUT
             echo "## Upgrading from ${PREV}" >> $GITHUB_OUTPUT
             echo "" >> $GITHUB_OUTPUT

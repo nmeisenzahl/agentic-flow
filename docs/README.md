@@ -23,22 +23,39 @@ agentic-flow automates specification and planning for every feature:
    ```bash
    unzip agentic-flow-v{version}.zip
    ```
-3. Compile the agentic workflow lock files (not shipped in the zip):
+3. Install the `gh aw` CLI extension and compile the agentic workflow lock files (not shipped in the zip):
    ```bash
+   gh extension install github/gh-aw
    gh aw compile .github/workflows/*.md
    ```
-4. Commit everything:
+4. Commit the agentic-flow files:
    ```bash
    git add .github/
    git commit -m "feat: add agentic-flow pipeline"
    git push
    ```
-5. Complete GitHub settings — see **[docs/init.md](init.md)** for the full setup walkthrough
-6. Open a test issue to verify triage fires
+5. Install spec-kit and initialize it in your repository — the wrapper agents read spec-kit phase/gate docs from `.github/agents/`:
+   ```bash
+   uv tool install specify-cli --from git+https://github.com/github/spec-kit.git
+   specify init . --ai copilot
+   ```
+   Verify these files exist after `specify init`:
+   - `.github/agents/speckit.specify.agent.md`
+   - `.github/agents/speckit.plan.agent.md`
+   - `.github/agents/speckit.tasks.agent.md`
+   - `.github/agents/speckit.clarify.agent.md`
+   - `.github/agents/speckit.checklist.agent.md`
+   - `.github/agents/speckit.analyze.agent.md`
+6. Commit the spec-kit files:
+   ```bash
+   git add .
+   git commit -m "chore: initialize spec-kit"
+   git push
+   ```
+7. Complete GitHub settings — see **[docs/init.md](init.md)** for the full setup walkthrough
+8. Open a test issue to verify triage fires
 
-`specify init . --ai copilot` is part of the setup because agentic-flow's shipped wrapper agents (`agentic-flow-spec`, `agentic-flow-plan`, `agentic-flow-tasks`) read the speckit phase/gate docs that `specify init` installs into `.github/agents/`.
-
-> **Upgrading?** Extracting a newer zip overwrites all framework files in `.github/agents/` and `.github/workflows/`. Back up any customisations before upgrading. See [docs/init.md § Upgrading](init.md#9-upgrading) for full instructions.
+> **Upgrading?** Extracting a newer zip overwrites all framework files in `.github/agents/` and `.github/workflows/`. Back up any customisations before upgrading. See [docs/init.md § Upgrading](init.md#7-upgrading) for full instructions.
 
 ## Documentation
 

@@ -51,49 +51,11 @@ Create the following labels before first use:
 
 ## 3. Copilot Coding Agent Settings
 
-In **repository Settings → Copilot → Coding agent**:
+In **repository Settings → Copilot → Cloud agent**:
 
 - **Enable coding agent** for this repository
-- **Allow agent to push to branches:** enabled (agents open PRs from spec branches)
-- **Allow agent to create issues:** enabled (for `/taskstoissues`)
+- **"Require approval for workflow runs":** disabled (agents run on demand via slash commands, so no need for manual workflow approvals)
 - **Firewall / allowed tools:** ensure `create_issue`, `add_sub_issue`, `create_or_update_file` are not blocked
-
-### MCP Servers
-
-The agentic-flow wrapper agents define their MCP server configuration directly in their YAML frontmatter (`mcp-servers:` property). This means the MCP config ships as code — no manual UI configuration is needed.
-
-Each agent declares only the tools it requires (least privilege):
-
-| Agent | Write tools | Label tools |
-|-------|------------|-------------|
-| `agentic-flow-spec` | `create_or_update_file`, `create_issue_comment`, `create_pull_request_review` | — |
-| `agentic-flow-plan` | `create_or_update_file`, `create_issue_comment`, `create_pull_request_review` | — |
-| `agentic-flow-tasks` | `create_or_update_file`, `create_issue_comment`, `create_pull_request_review` | `issue_write` |
-| `agentic-flow-implement` | `create_or_update_file`, `create_issue_comment` | `issue_write` |
-| `agentic-flow-audit` | `create_issue_comment`, `create_pull_request_review` | `issue_write` |
-
-All three agents connect to `https://api.githubcopilot.com/mcp/` using `COPILOT_MCP_GITHUB_WRITE_TOKEN` from the `copilot` environment (see §5b).
-
-> **Important:** If you previously configured a GitHub MCP server in the repository UI (Settings → Copilot → Cloud agent), **remove it** after deploying these agents. Repo-level MCP config merges with agent-level config and would grant tools beyond each agent's least-privilege set.
-
-#### Microsoft Docs MCP Server (optional)
-
-Required by: the agentic-flow research agent (`research.md`) for technology reference lookups
-
-```json
-{
-  "mcpServers": {
-    "microsoft-docs": {
-      "type": "http",
-      "url": "https://learn.microsoft.com/api/mcp"
-    }
-  }
-}
-```
-
-Used for: surfacing relevant Microsoft/Azure documentation during research phase.
-
-> **Note:** MCP server availability depends on your Copilot plan and organization policies. If a server is unavailable, the relevant agent degrades gracefully — research still runs using web search tools.
 
 ---
 
@@ -103,7 +65,6 @@ In **repository Settings → Actions → General**:
 
 - **Workflow permissions:** Read and write permissions
 - **Allow GitHub Actions to create and approve pull requests:** enabled
-- **"Require approval for workflow runs":** disabled (agents run on demand via slash commands, so no need for manual workflow approvals)
 
 The `GITHUB_TOKEN` used by workflows needs the following scopes at runtime (set via `permissions:` in each workflow file):
 
@@ -185,10 +146,6 @@ Add the following secret to the `copilot` environment:
 
 > **Why the `copilot` environment?** The `${{ secrets.COPILOT_MCP_* }}` syntax in agent YAML frontmatter resolves secrets from the `copilot` environment only — repo-level Action secrets are not available for MCP variable substitution.
 
-#### Remove any repo-level MCP UI config
-
-If you previously configured a GitHub MCP server in **Settings → Copilot → Cloud agent**, remove it. The wrapper agents now carry their own per-agent MCP config in YAML frontmatter. Leaving the repo-level config in place would merge additional tools into the agent's session, bypassing the per-agent least-privilege tool lists.
-
 #### `copilot-setup-steps.yml`
 
 The framework ships `copilot-setup-steps.yml` in `.github/workflows/`. This workflow runs automatically before every Copilot coding agent session. It is shipped as a ready-to-extend template — add your own setup steps (dependency installation, tool setup, etc.) as needed.
@@ -212,59 +169,7 @@ On the `main` branch (Settings → Branches → Add rule):
 
 ---
 
-## 7. Agentic Workflows (`.md`)
-
-agentic-flow uses GitHub Agentic Workflows for slash command routing. The release zip ships only the `.md` source files — **compiled `.lock.yml` files are not included**. You must compile them after installation.
-
-1. **Install the `gh aw` CLI extension** on your machine:
-   ```bash
-   gh extension install github/gh-aw
-   ```
-2. **Compile all agentic workflow sources** after extracting the zip:
-   ```bash
-   gh aw compile .github/workflows/*.md
-   ```
-3. **Commit the compiled outputs**:
-   ```bash
-   git add .github/workflows/*.lock.yml
-   git commit -m "chore: compile agentic workflow lock files"
-   git push
-   ```
-
-> Recompile and commit whenever you modify a `.md` workflow source.
-
----
-
-## 8. spec-kit Installation
-
-agentic-flow's wrapper agents read spec-kit phase/gate documents directly from `.github/agents/`. The target repository must have spec-kit initialized:
-
-```bash
-# Install spec-kit CLI
-uv tool install specify-cli --from git+https://github.com/github/spec-kit.git
-
-# Initialize in the target repository
-cd your-repo
-specify init . --ai copilot
-```
-
-The `specify init` command copies spec-kit skill/template files into the repository, including the speckit phase and gate agents that agentic-flow expects to find in `.github/agents/`.
-
-Verify these files exist after `specify init`:
-
-- `.github/agents/speckit.specify.agent.md`
-- `.github/agents/speckit.plan.agent.md`
-- `.github/agents/speckit.tasks.agent.md`
-- `.github/agents/speckit.clarify.agent.md`
-- `.github/agents/speckit.checklist.agent.md`
-- `.github/agents/speckit.analyze.agent.md`
-
-agentic-flow ships only the wrapper agents. If these speckit files are missing, the wrapper agents cannot run.
-
----
-
-
-## 9. Upgrading
+## 7. Upgrading
 
 To upgrade to a newer version of agentic-flow:
 
