@@ -45,7 +45,7 @@ inputs:
     description: 'Task or audit issue number (direct mode only).'
     required: false
   feature-pr-number:
-    description: 'Feature PR number (direct mode, implement stage only).'
+    description: 'Feature PR number (direct mode, implement, review, and review-fix stages).'
     required: false
 
 outputs:

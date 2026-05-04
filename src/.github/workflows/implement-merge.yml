@@ -19,7 +19,7 @@ jobs:
   merge-task-pr:
     if: |
       (github.event_name == 'pull_request') ||
-      (github.event_name == 'check_run' && (startsWith(github.event.check_run.check_suite.head_branch, 'implement/') || startsWith(github.event.check_run.check_suite.head_branch, 'task/')))
+      (github.event_name == 'check_run' && (startsWith(github.event.check_run.check_suite.head_branch, 'implement/') || startsWith(github.event.check_run.check_suite.head_branch, 'task/') || startsWith(github.event.check_run.check_suite.head_branch, 'review-fix/')))
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -184,6 +184,7 @@ jobs:
             core.setOutput('feature_branch',       pr.base.ref);
             core.setOutput('task_branch',          pr.head.ref);
             core.setOutput('head_sha',             pr.head.sha);
+            core.setOutput('task_pr_labels',       JSON.stringify(pr.labels?.map(l => l.name) || []));
 
       - name: Merge task PR into feature branch
         id: merge
@@ -258,7 +259,7 @@ jobs:
             core.setOutput('merged', 'true');
 
       - name: Close task issue with summary
-        if: steps.resolve.outputs.skip != 'true' && steps.merge.outputs.merged == 'true'
+        if: steps.resolve.outputs.skip != 'true' && steps.merge.outputs.merged == 'true' && !contains(steps.resolve.outputs.task_pr_labels, 'agentic-flow-review-fix-pr')
         uses: actions/github-script@v8
         with:
           script: |
@@ -309,7 +310,7 @@ jobs:
             });
 
       - name: Find next task or dispatch audit
-        if: steps.resolve.outputs.skip != 'true' && steps.merge.outputs.merged == 'true'
+        if: steps.resolve.outputs.skip != 'true' && steps.merge.outputs.merged == 'true' && !contains(steps.resolve.outputs.task_pr_labels, 'agentic-flow-review-fix-pr')
         uses: actions/github-script@v8
         with:
           script: |

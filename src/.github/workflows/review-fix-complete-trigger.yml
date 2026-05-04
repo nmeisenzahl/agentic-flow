@@ -1,0 +1,74 @@
+name: Review Fix Complete Trigger (agentic-flow)
+
+on:
+  pull_request:
+    types: [closed]
+
+concurrency:
+  group: review-fix-complete-trigger-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  handle-review-fix-complete:
+    name: Dispatch review stage after review-fix PR merge
+    # Only fire when a review-fix PR is merged and carries the agentic-flow-review-fix-pr label
+    if: >-
+      github.event.pull_request.merged == true &&
+      contains(toJSON(github.event.pull_request.labels), 'agentic-flow-review-fix-pr')
+    runs-on: ubuntu-latest
+    environment: copilot
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse feature context from fix PR body and dispatch review
+        uses: actions/github-script@v8
+        with:
+          github-token: ${{ secrets.GH_AW_AGENT_TOKEN }}
+          script: |
+            const owner = context.repo.owner;
+            const repo  = context.repo.repo;
+            const pr    = context.payload.pull_request;
+            const body  = pr.body || '';
+
+            // Parse required fields from the fix PR body
+            const field = (name) => {
+              const m = body.match(new RegExp(`\\*\\*${name}:\\*\\*\\s*#?(\\S+)`, 'i'));
+              return m ? m[1].trim() : null;
+            };
+
+            const featureIssueNumber = field('Feature issue');
+            const featurePRNumber    = field('Feature PR');
+            const specDirectory      = body.match(/\*\*Spec directory:\*\*\s*(\S+)/i)?.[1]?.trim() || null;
+
+            if (!featureIssueNumber || !featurePRNumber || !specDirectory) {
+              core.setFailed(
+                `Could not parse required fields from review-fix PR #${pr.number} body.\n` +
+                `feature issue: ${featureIssueNumber}, feature PR: ${featurePRNumber}, spec: ${specDirectory}`
+              );
+              return;
+            }
+
+            // Derive feature branch from the fix PR base branch
+            const featureBranch = pr.base.ref;
+
+            core.info(
+              `Review-fix PR #${pr.number} merged. ` +
+              `Dispatching review-dispatch for feature PR #${featurePRNumber} (issue #${featureIssueNumber}).`
+            );
+
+            await github.rest.actions.createWorkflowDispatch({
+              owner, repo,
+              workflow_id: 'review-dispatch.yml',
+              ref: 'main',
+              inputs: {
+                feature_issue_number: featureIssueNumber,
+                feature_pr_number:    featurePRNumber,
+                feature_branch:       featureBranch,
+                spec_directory:       specDirectory,
+              },
+            });

@@ -175,7 +175,7 @@ jobs:
               },
             });
 
-      - name: Mark feature PR ready for human merge
+      - name: Dispatch review stage
         if: steps.parse.outputs.skip != 'true' && steps.context.outputs.skip_chain != 'true' && steps.context.outputs.open_audit_count == '0'
         uses: actions/github-script@v8
         with:
@@ -183,75 +183,21 @@ jobs:
           script: |
             const owner              = context.repo.owner;
             const repo               = context.repo.repo;
-            const featureIssueNumber = Number('${{ steps.parse.outputs.feature_issue_number }}');
-            const featurePRNumber    = Number('${{ steps.context.outputs.feature_pr_number }}');
+            const featureIssueNumber = '${{ steps.parse.outputs.feature_issue_number }}';
+            const featurePRNumber    = '${{ steps.context.outputs.feature_pr_number }}';
+            const featureBranch      = '${{ steps.context.outputs.feature_branch }}';
+            const specDirectory      = '${{ steps.context.outputs.spec_directory }}';
 
-            // Collect audit task results from sub-issues
-            let subIssues = [];
-            try {
-              const { data } = await github.request(
-                'GET /repos/{owner}/{repo}/issues/{issue_number}/sub_issues',
-                { owner, repo, issue_number: featureIssueNumber }
-              );
-              subIssues = data || [];
-            } catch (e) {
-              core.warning(`Could not fetch sub-issues for summary: ${e.message}`);
-            }
+            core.info(`All audits complete. Dispatching review stage for feature PR #${featurePRNumber}.`);
 
-            const closedAuditTasks = subIssues.filter(si =>
-              si.labels?.some(l => l.name === 'agentic-flow-audit') && si.state === 'closed'
-            );
-
-            const auditSummary = closedAuditTasks.map(i => `- ✅ #${i.number}: ${i.title}`).join('\n') || '_No audit tasks_';
-
-            // Mark feature PR as non-draft (ready for review)
-            try {
-              await github.rest.pulls.update({
-                owner, repo, pull_number: featurePRNumber, draft: false,
-              });
-            } catch (e) {
-              core.warning(`Could not un-draft feature PR: ${e.message}`);
-            }
-
-            // Apply implementation-complete label to feature issue
-            try {
-              await github.rest.issues.addLabels({
-                owner, repo, issue_number: featureIssueNumber, labels: ['implementation-complete'],
-              });
-            } catch (e) {
-              core.warning(`Could not add implementation-complete label: ${e.message}`);
-            }
-
-            // Summary comment on feature issue
-            await github.rest.issues.createComment({
-              owner, repo, issue_number: featureIssueNumber,
-              body: [
-                '## 🎉 All Audits Complete — Ready for Human Merge',
-                '',
-                'All audit tasks have been reviewed and approved.',
-                '',
-                '### Completed Audits',
-                auditSummary,
-                '',
-                `**Feature PR #${featurePRNumber}** is ready for human review and merge to \`main\`.`,
-                '',
-                '_agentic-flow implementation pipeline_',
-              ].join('\n'),
-            });
-
-            // Comment on feature PR to prompt human
-            await github.rest.issues.createComment({
-              owner, repo, issue_number: featurePRNumber,
-              body: [
-                '## 🎉 All Audits Complete — Ready for Human Review',
-                '',
-                'All implementation tasks have been merged and all audit tasks have been reviewed and approved.',
-                '',
-                '### Completed Audits',
-                auditSummary,
-                '',
-                'This PR is ready for human review and merge to `main`.',
-                '',
-                '_agentic-flow implementation pipeline_',
-              ].join('\n'),
+            await github.rest.actions.createWorkflowDispatch({
+              owner, repo,
+              workflow_id: 'review-dispatch.yml',
+              ref: 'main',
+              inputs: {
+                feature_issue_number: featureIssueNumber,
+                feature_pr_number:    featurePRNumber,
+                feature_branch:       featureBranch,
+                spec_directory:       specDirectory,
+              },
             });

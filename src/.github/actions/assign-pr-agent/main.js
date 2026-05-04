@@ -97,7 +97,7 @@ if (contextSource === "safe-output") {
   if (!/^[1-9]\d*$/.test(pullNumberFromInput)) fail(`Invalid pull-number for ${stageName}: ${JSON.stringify(pullNumberFromInput)}`);
   if (!/^[1-9]\d*$/.test(featureIssueNumber)) fail(`Invalid feature-issue-number for ${stageName}: ${JSON.stringify(featureIssueNumber)}`);
   if (!/^specs\/[0-9]{3}-[a-z0-9][a-z0-9-]*$/.test(specDirectory)) fail(`Invalid spec-directory for ${stageName}: ${JSON.stringify(specDirectory)}`);
-  if (!/^[1-9]\d*$/.test(taskIssueNumber)) fail(`Invalid task-issue-number for ${stageName}: ${JSON.stringify(taskIssueNumber)}`);
+  if (stageName !== 'review' && !/^[1-9]\d*$/.test(taskIssueNumber)) fail(`Invalid task-issue-number for ${stageName}: ${JSON.stringify(taskIssueNumber)}`);
 
   // Set variables to match what safe-output mode would have produced
   itemPullNumber = pullNumberFromInput;
@@ -285,8 +285,38 @@ if (stageName === "plan") {
     `6. Update issue #${stageIssueRef} with a validation summary, then close the issue if all checks pass.`,
     `7. Post a context comment on this PR with the \`<!-- agentic-flow-context ... -->\` block.`,
   ].join("\n");
+} else if (stageName === "review") {
+  firstLine = `@copilot please use the already-assigned \`${agentName}\` custom agent to perform a four-category cross-cutting review of this feature PR and post your review findings when done.`;
+  contextPhase = "review";
+  contextRunMode = "review";
+  agentHeader = "Review Agent — Startup Instructions";
+  instructions = [
+    `1. Read the most recent \`<!-- agentic-flow-context\` comment on this PR (Phase: review) to confirm context.`,
+    `2. Read \`${specDirectory}/spec.md\`, \`${specDirectory}/plan.md\`, and \`${specDirectory}/tasks.md\` for full feature context (if \`tasks.md\` is absent, note it in the coverage check rather than failing).`,
+    `3. Fetch and review the complete diff of this feature PR: \`git fetch origin && git diff origin/main...origin/${headRefName}\`.`,
+    `4. Perform four cross-cutting checks: (a) **Security**: hardcoded credentials/secrets, unsafe user-input handling, injection-pattern anti-patterns, vulnerable dependency versions; (b) **Architecture**: adherence to all decisions in \`plan.md\`, absence of unintended coupling, naming/structural consistency; (c) **Acceptance Criteria**: confirm every criterion in \`spec.md\` has a corresponding implementation or test — list each unmet criterion individually; (d) **Coverage**: test presence for critical paths in \`tasks.md\` and obvious untested branches in new code.`,
+    `5. If APPROVE: post a findings summary comment on this PR, then call \`create_pull_request_review\` with \`event: "APPROVE"\`, then post the \`<!-- agentic-flow-context Phase: review ... Audit result: APPROVE -->\` context block comment on this PR.`,
+    `6. If REQUEST_CHANGES: post a structured findings comment organised by category (each finding includes: category, file path, description, remediation guidance), then call \`create_pull_request_review\` with \`event: "REQUEST_CHANGES"\`, then post the context block comment with \`Audit result: REQUEST_CHANGES\`.`,
+    `7. **Completion gate** (mandatory — do not skip): call \`list_issue_comments\` on this PR and verify a comment exists containing \`<!-- agentic-flow-context\`, \`Phase: review\`, and \`Audit result:\`. If not found, post the context block now, then re-verify.`,
+  ].join("\n");
+} else if (stageName === "review-fix") {
+  stageIssueRef = directMode ? featurePRNumberDirect : "";
+  stageIssueLabel = "Feature PR";
+  firstLine = `@copilot please use the already-assigned \`${agentName}\` custom agent to implement the review fixes described in the findings comment on feature PR #${stageIssueRef} and post your completion summary when done (the comment MUST include the \`<!-- agentic-flow-context ... -->\` block).`;
+  contextPhase = "review-fix";
+  contextRunMode = "review-fix";
+  agentHeader = "Review Fix Agent — Startup Instructions";
+  instructions = [
+    `1. Read the findings comment on feature PR #${stageIssueRef} — it describes the review findings that must be addressed. The findings comment is the most recent bot comment on that PR that does NOT contain \`<!-- agentic-flow-context\`.`,
+    `2. Read this fix PR body for additional context on the fix scope.`,
+    `3. Read \`${specDirectory}/spec.md\`, \`${specDirectory}/plan.md\`, and \`${specDirectory}/tasks.md\` for full feature context.`,
+    `4. Read the current state of the feature branch (\`${baseRefName}\`) to understand what has already been implemented.`,
+    `5. Implement all fixes on branch \`${headRefName}\` to address the review findings. Use \`create_or_update_file\` to commit all changes — do NOT use \`git push\`.`,
+    `6. Post an implementation summary on this PR. The comment MUST include the \`<!-- agentic-flow-context ... -->\` block with \`Phase: review-fix\`.`,
+    `7. Apply the \`ready-to-merge-task\` label to this PR to signal completion and trigger auto-merge.`,
+  ].join("\n");
 } else {
-  fail(`Unknown stage-name: ${JSON.stringify(stageName)}. Must be plan | refine | tasks | implement | audit.`);
+  fail(`Unknown stage-name: ${JSON.stringify(stageName)}. Must be plan | refine | tasks | implement | audit | review | review-fix.`);
 }
 
 const contextBlock = [
@@ -305,10 +335,19 @@ const contextBlock = [
     `Feature PR: #${itemPullNumber}`,
     `Feature branch: \`${headRefName}\``,
   ] : []),
+  ...(stageName === "review" ? [
+    `Feature PR: #${itemPullNumber}`,
+    `Feature branch: \`${headRefName}\``,
+  ] : []),
+  ...(stageName === "review-fix" ? [
+    `Feature branch: \`${baseRefName}\``,
+    `Fix branch: \`${headRefName}\``,
+    ...(featurePRNumberDirect ? [`Feature PR: #${featurePRNumberDirect}`] : []),
+  ] : []),
   ...(primaryArtefact ? [`Primary artefact: ${primaryArtefact}`] : []),
   ...(specKitPhaseAgent ? [`Speckit phase agent: ${specKitPhaseAgent}`] : []),
   ...additionalContextFields,
-  ...(stageName !== "implement" && stageName !== "audit" ? ["Constitution: .specify/memory/constitution.md"] : []),
+  ...(stageName !== "implement" && stageName !== "audit" && stageName !== "review" && stageName !== "review-fix" ? ["Constitution: .specify/memory/constitution.md"] : []),
   "-->",
 ].join("\n");
 
@@ -320,9 +359,13 @@ const humanNote = stageName === "plan"
   ? `> [!IMPORTANT]\n> **👉 Next step for the human reviewer:** Review \`${primaryArtefact}\` in this PR. When satisfied, **merge this PR** to create the implementation task sub-issues. Do not merge the PR or trigger follow-up workflow actions yourself.`
   : stageName === "implement"
   ? `> This task PR will be **auto-merged** once CI checks pass. No human action required.`
+  : stageName === "review"
+  ? `> This feature PR review is automatic — no human action required until the review agent posts its result.`
+  : stageName === "review-fix"
+  ? `> This review fix task PR will be **auto-merged** once CI checks pass. No human action required.`
   : `> [!IMPORTANT]\n> **👉 Next step for the human reviewer:** Review the audit findings on this feature PR. If the audit requested changes, address them and post \`/rerun-audit\` as a comment to re-run the audit.`;
 
-const sourceArtefactsRow = (stageName === "tasks" || stageName === "implement" || stageName === "audit")
+const sourceArtefactsRow = (stageName === "tasks" || stageName === "implement" || stageName === "audit" || stageName === "review" || stageName === "review-fix")
   ? `| Source artefacts | \`${specDirectory}/spec.md\`, \`${specDirectory}/plan.md\` |`
   : `| Source artefact | \`${specDirectory}/spec.md\` |`;
 
@@ -334,12 +377,20 @@ const yourTaskLine = stageName === "plan"
   ? `**Your task**: Generate \`${primaryArtefact}\` — the dependency-ordered implementation task breakdown for this feature.`
   : stageName === "implement"
   ? `**Your task**: Implement the changes described in task issue #${stageIssueRef} on branch \`${headRefName}\`.`
+  : stageName === "review"
+  ? `**Your task**: Perform a four-category cross-cutting review (security, architecture, acceptance criteria, coverage) of this feature PR and post your findings.`
+  : stageName === "review-fix"
+  ? `**Your task**: Implement the review fixes described in the findings comment on feature PR #${stageIssueRef} on branch \`${headRefName}\`.`
   : `**Your task**: Perform the audit described in issue #${stageIssueRef} and review this feature PR.`;
 
 const triggeredByLine = stageName === "implement"
   ? `Triggered by agentic-flow implementation pipeline for task #${stageIssueRef}`
   : stageName === "audit"
   ? `Triggered by agentic-flow audit pipeline for audit task #${stageIssueRef}`
+  : stageName === "review"
+  ? `Triggered by agentic-flow review pipeline for feature PR #${itemPullNumber}`
+  : stageName === "review-fix"
+  ? `Triggered by agentic-flow review fix pipeline for feature PR #${stageIssueRef}`
   : `Triggered by \`/${stageName === "plan" ? "approve-spec" : stageName === "refine" ? "refine-spec" : "approve-plan"}\` on PR #${itemPullNumber} — agentic-flow`;
 
 const startupCommentBody = [
@@ -443,16 +494,16 @@ const replaceActors = async ({ actorIds, customAgent = null, customInstructions:
 
 // ── addAssignees → post-comment → removeAssignees sequence ──────────
 if (copilotAlreadyAssigned) {
-  if (stageName === 'implement') {
-    // Implement: skip entirely — Copilot is actively coding; don't interrupt.
+  if (stageName === 'implement' || stageName === 'review-fix') {
+    // Implement / review-fix: skip entirely — Copilot is actively coding; don't interrupt.
     core.info(`Copilot is already assigned to PR #${itemPullNumber} for ${stageName} stage; skipping to avoid interrupting the ongoing session.`);
     core.setOutput('startup-comment-id', '');
     return;
   }
-  if (stageName === 'audit') {
-    // Audit: Copilot may already be assigned from a prior audit task on the same PR.
+  if (stageName === 'audit' || stageName === 'review') {
+    // Audit / review: Copilot may already be assigned from a prior run on the same PR.
     // Don't re-assign (that would interrupt any ongoing session), but DO post the
-    // startup comment so Copilot gets the new audit task context.
+    // startup comment so Copilot gets the new context.
     core.info(`Copilot is already assigned to PR #${itemPullNumber} for ${stageName} stage; posting startup comment without re-assigning.`);
     // Fall through to the startup comment step below.
   } else {
@@ -469,9 +520,9 @@ if (copilotAlreadyAssigned) {
 // reassignment directly. Also force a fresh reassignment when Copilot is already
 // present and forward the exact startup comment body through customInstructions
 // so the new session starts with explicit stage-specific context.
-// Skip replaceActors for the audit stage when Copilot is already assigned —
+// Skip replaceActors for the audit/review stages when Copilot is already assigned —
 // we only need the startup comment in that case (assignment was handled previously).
-if (!(copilotAlreadyAssigned && stageName === 'audit')) {
+if (!(copilotAlreadyAssigned && (stageName === 'audit' || stageName === 'review'))) {
   const actorIds = [agent.id, ...(await getCurrentAssigneeIds()).filter(id => id !== agent.id)];
   await replaceActors({
     actorIds,

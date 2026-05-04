@@ -1,0 +1,183 @@
+name: Review Fix Dispatch (agentic-flow)
+
+on:
+  workflow_dispatch:
+    inputs:
+      feature_issue_number:
+        description: 'Feature issue number'
+        required: true
+      feature_pr_number:
+        description: 'Feature PR number'
+        required: true
+      feature_branch:
+        description: 'Feature branch name (e.g. implement/001-my-feature)'
+        required: true
+      spec_directory:
+        description: 'Spec directory (e.g. specs/001-my-feature)'
+        required: true
+
+concurrency:
+  group: review-fix-dispatch-${{ github.event.inputs.feature_pr_number }}
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    name: Create review-fix branch and assign implement agent
+    runs-on: ubuntu-latest
+    environment: copilot
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_AW_AGENT_TOKEN }}
+          fetch-depth: 0
+
+      - name: Guard — verify feature PR is open and no active review-fix PR exists
+        id: guard
+        uses: actions/github-script@v8
+        with:
+          github-token: ${{ secrets.GH_AW_AGENT_TOKEN }}
+          script: |
+            const owner          = context.repo.owner;
+            const repo           = context.repo.repo;
+            const featurePRNum   = parseInt('${{ github.event.inputs.feature_pr_number }}');
+            const featureBranch  = '${{ github.event.inputs.feature_branch }}';
+
+            // Verify feature PR is still open
+            const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: featurePRNum });
+            if (pr.state !== 'open') {
+              core.warning(`Feature PR #${featurePRNum} is not open (state: ${pr.state}); skipping review-fix dispatch.`);
+              core.setOutput('skip', 'true');
+              return;
+            }
+
+            // Derive fix branch name
+            const suffix   = featureBranch.replace(/^implement\//, '');
+            const fixBranch = `review-fix/${suffix}`;
+
+            // Check for an already-open review-fix PR
+            const { data: existingPRs } = await github.rest.pulls.list({
+              owner, repo, state: 'open', head: `${owner}:${fixBranch}`, per_page: 1,
+            });
+            if (existingPRs.length > 0) {
+              core.warning(`Open review-fix PR already exists for branch ${fixBranch}; skipping re-dispatch.`);
+              core.setOutput('skip', 'true');
+              return;
+            }
+
+            core.setOutput('skip', 'false');
+            core.setOutput('fix_branch', fixBranch);
+            core.setOutput('feature_suffix', suffix);
+
+      - name: Create (or recreate) review-fix branch from feature branch
+        if: steps.guard.outputs.skip != 'true'
+        run: |
+          FEATURE_BRANCH="${{ github.event.inputs.feature_branch }}"
+          FIX_BRANCH="${{ steps.guard.outputs.fix_branch }}"
+
+          git fetch origin "${FEATURE_BRANCH}"
+
+          # Delete remote fix branch if it exists (idempotency)
+          git push origin --delete "${FIX_BRANCH}" 2>/dev/null || true
+
+          # Create fix branch at tip of feature branch
+          git checkout -b "${FIX_BRANCH}" "origin/${FEATURE_BRANCH}"
+          git push origin "${FIX_BRANCH}"
+        env:
+          GH_TOKEN: ${{ secrets.GH_AW_AGENT_TOKEN }}
+
+      - name: Find latest review findings comment
+        id: findings
+        if: steps.guard.outputs.skip != 'true'
+        uses: actions/github-script@v8
+        with:
+          github-token: ${{ secrets.GH_AW_AGENT_TOKEN }}
+          script: |
+            const owner        = context.repo.owner;
+            const repo         = context.repo.repo;
+            const featurePRNum = parseInt('${{ github.event.inputs.feature_pr_number }}');
+
+            const { data: allComments } = await github.rest.issues.listComments({
+              owner, repo, issue_number: featurePRNum, per_page: 100,
+            });
+
+            // Find the most recent bot comment WITHOUT an agentic-flow-context block
+            // (that is the findings comment, not the context block comment)
+            const botComments = allComments.filter(c =>
+              (c.user?.type === 'Bot' || (c.user?.login || '').endsWith('[bot]')) &&
+              !(c.body || '').includes('<!-- agentic-flow-context')
+            );
+
+            const findingsComment = botComments[botComments.length - 1];
+            const snippet = findingsComment
+              ? (findingsComment.body || '').slice(0, 3000)
+              : '(no findings comment found — see feature PR for details)';
+
+            core.setOutput('findings_snippet', snippet);
+
+      - name: Open review-fix PR and assign implement agent
+        id: open-pr
+        if: steps.guard.outputs.skip != 'true'
+        uses: actions/github-script@v8
+        with:
+          github-token: ${{ secrets.GH_AW_AGENT_TOKEN }}
+          script: |
+            const owner              = context.repo.owner;
+            const repo               = context.repo.repo;
+            const featureBranch      = '${{ github.event.inputs.feature_branch }}';
+            const fixBranch          = '${{ steps.guard.outputs.fix_branch }}';
+            const featureIssueNumber = '${{ github.event.inputs.feature_issue_number }}';
+            const featurePRNumber    = '${{ github.event.inputs.feature_pr_number }}';
+            const specDirectory      = '${{ github.event.inputs.spec_directory }}';
+            const findingsSnippet    = process.env.FINDINGS_SNIPPET;
+
+            // Build PR body — all four required fields for implement-merge.yml parsing
+            const prBody = [
+              `**Feature issue:** #${featureIssueNumber}`,
+              `**Feature PR:** #${featurePRNumber}`,
+              `**Task issue:** #${featureIssueNumber}`,
+              `**Spec directory:** ${specDirectory}`,
+              '',
+              '---',
+              '',
+              '## Review Findings to Address',
+              '',
+              findingsSnippet,
+            ].join('\n');
+
+            // Create the review-fix PR
+            const { data: fixPR } = await github.rest.pulls.create({
+              owner, repo,
+              title: `review-fix: Address review findings for ${featureBranch}`,
+              head: fixBranch,
+              base: featureBranch,
+              body: prBody,
+              draft: false,
+            });
+
+            // Apply both required labels
+            await github.rest.issues.addLabels({
+              owner, repo, issue_number: fixPR.number,
+              labels: ['agentic-flow-task-pr', 'agentic-flow-review-fix-pr'],
+            });
+
+            core.setOutput('fix_pr_number', String(fixPR.number));
+        env:
+          FINDINGS_SNIPPET: ${{ steps.findings.outputs.findings_snippet }}
+
+      - name: Assign review-fix stage to implement agent
+        if: steps.guard.outputs.skip != 'true'
+        uses: ./.github/actions/assign-pr-agent
+        with:
+          stage-name: review-fix
+          agent-name: agentic-flow-implement
+          context-source: direct
+          pull-number: ${{ steps.open-pr.outputs.fix_pr_number }}
+          feature-issue-number: ${{ github.event.inputs.feature_issue_number }}
+          feature-pr-number: ${{ github.event.inputs.feature_pr_number }}
+          spec-directory: ${{ github.event.inputs.spec_directory }}
+          agent-token: ${{ secrets.GH_AW_AGENT_TOKEN }}

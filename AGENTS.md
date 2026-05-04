@@ -26,7 +26,7 @@ without a merged spec is a process violation.
 | Path | Purpose |
 |------|---------|
 | `src/` | Framework source; shipped to users via release zip (src/ prefix stripped) |
-| `src/.github/agents/` | Agentic-flow wrapper agents (`agentic-flow-spec`, `agentic-flow-plan`, `agentic-flow-tasks`, `agentic-flow-implement`, `agentic-flow-audit`) that consume speckit docs installed by `specify init` |
+| `src/.github/agents/` | Agentic-flow wrapper agents (`agentic-flow-spec`, `agentic-flow-plan`, `agentic-flow-tasks`, `agentic-flow-implement`, `agentic-flow-audit`, `agentic-flow-review`) that consume speckit docs installed by `specify init` |
 | `src/.github/workflows/` | `.md` agentic workflow sources + standard GHA workflows (`.lock.yml` compiled outputs are gitignored — users generate them) |
 | `src/.github/actions/` | Composite actions (e.g. `assign-pr-agent`) extracted from inline safe-output job blocks |
 | `src/.github/copilot/instructions.md` | Agent constitution — authoritative agent runtime rules |
@@ -56,7 +56,7 @@ gh aw compile src/.github/workflows/triage.md \
               src/.github/workflows/post-merge.md
 ```
 
-> Note: `implement-trigger.yml`, `implement-dispatch.yml`, `implement-merge.yml`, `audit-dispatch.yml`, `audit-chain-trigger.yml`, and `rerun-audit-trigger.yml` are standard GHA YAML workflows (not agentic workflow `.md` files) — they are not compiled with `gh aw`.
+> Note: `implement-trigger.yml`, `implement-dispatch.yml`, `implement-merge.yml`, `audit-dispatch.yml`, `audit-chain-trigger.yml`, `rerun-audit-trigger.yml`, `review-dispatch.yml`, `review-result-trigger.yml`, `review-fix-dispatch.yml`, and `review-fix-complete-trigger.yml` are standard GHA YAML workflows (not agentic workflow `.md` files) — they are not compiled with `gh aw`.
 
 ### Verify compiled outputs are current
 
@@ -116,6 +116,11 @@ developed using spec-kit locally via the specify slash commands.
 | No automatic reconciliation for partial-success pipeline failures | If a task PR merges but a downstream step (close issue, dispatch next) fails, the pipeline stalls. Recovery is manual: inspect feature issue sub-issues and re-run the failed workflow. A dedicated reconciliation workflow is a planned future enhancement. |
 | No watchdog for silent agent timeouts | If an agent session fails to apply `ready-to-merge-task` or close an audit issue, the pipeline hangs. Manual recovery via `/rerun-audit` (audit) or workflow re-run (implementation). Scheduled timeout detection is a planned future enhancement. |
 | `mergeable` + check-runs vs `mergeStateStatus` UNSTABLE | `mergeStateStatus` is set to `UNSTABLE` by GitHub when legacy Commit Status API returns `pending` with zero entries — common in repos with no CI. `implement-merge.yml` uses `mergeable` (GraphQL) + explicit check-run listing instead, bypassing the false UNSTABLE state. Pass allowlist (`success\|neutral\|skipped`) instead of failure denylist correctly handles all-pending and in-progress states. |
+| Review stage inserted between audit and human merge | A dedicated automated review wrapper (`agentic-flow-review`) runs four cross-cutting checks (security, architecture, acceptance criteria, coverage) after all audit task issues close. This keeps audit focused on task-level correctness and review focused on holistic quality gates, without conflating the two concerns. |
+| Review stage uses feature PR directly (no review task issue) | Unlike audit, the review stage does not create a sub-issue per review cycle. There is no natural "task" decomposition for a cross-cutting review. `taskIssueNumber` validation is skipped for the `review` stage in `assign-pr-agent`. |
+| review-fix PRs use implement agent, not review agent | The review agent identifies problems; the implement agent fixes them. Reusing `agentic-flow-implement` on a `review-fix/{suffix}` branch keeps fix cycles consistent with the task implementation pattern and avoids building a separate fix-writing agent. |
+| review-fix PR merge does not advance audit chain | `implement-merge.yml` guards "Close task issue" and "Find next task" steps with `!contains(task_pr_labels, 'agentic-flow-review-fix-pr')`. Without this guard, a review-fix merge would trigger `audit-chain-trigger.yml` which — finding no open audit tasks — would re-dispatch the review stage spuriously. |
+| Review fix loop cap set to 5 | Unlimited review-fix cycles would waste resources if the agent cannot converge. Five iterations provides enough runway for genuine issues while bounding runaway fix loops. Human intervention is required if the loop is exhausted (REQUEST_CHANGES ≥ 5 times). |
 
 ---
 
@@ -133,7 +138,8 @@ developed using spec-kit locally via the specify slash commands.
 | 5 — Post-merge | Spec PR merged | `post-merge-trigger.yml` → `post-merge.md` | Task sub-issues created |
 | 6 — Implementation | `tasks-created` label | `implement-trigger.yml` → `implement-dispatch.yml` → `agentic-flow-implement` | Task branches + auto-merged task PRs into feature branch |
 | 7 — Audit | All implementation tasks done | `audit-dispatch.yml` → `agentic-flow-audit` | PR review on feature PR; audit task issues closed |
-| 8 — Merge | Human | Human reviews feature PR + merges | Feature on `main` |
+| 8 — Review | All audits complete | `audit-chain-trigger.yml` → `review-dispatch.yml` → `agentic-flow-review` | Four-category cross-cutting check; APPROVE transitions to merge gate; REQUEST_CHANGES triggers fix loop (max 5 iterations) |
+| 9 — Merge | Human | Human reviews feature PR + merges | Feature on `main` |
 
 > Agent runtime behavioural rules are in `src/.github/copilot/instructions.md`.
 
@@ -148,6 +154,11 @@ developed using spec-kit locally via the specify slash commands.
 | **Release test** | Push a test tag → verify release zip is created; run the validation array from `release.yml` locally against the extracted zip |
 | **Implementation smoke test** | Apply `tasks-created` label to a feature issue with task sub-issues → verify feature branch created, draft PR opened, first task dispatched to `implement-dispatch.yml` |
 | **Auto-merge test** | Task PR with `ready-to-merge-task` label + passing CI → verify `implement-merge.yml` squash-merges it, closes task issue, dispatches next task or audit |
-| **Audit chain test** | Close an audit task issue with `agentic-flow-audit` label → verify `audit-chain-trigger.yml` fires and dispatches next open audit task or marks feature PR ready |
+| **Audit chain test** | Close an audit task issue with `agentic-flow-audit` label → verify `audit-chain-trigger.yml` fires and dispatches next open audit task or dispatches `review-dispatch.yml` when all audits are done |
+| **Review dispatch test** | Trigger `review-dispatch.yml` for an open feature PR → verify `assign-pr-agent` assigns the review agent and posts a startup comment with `Phase: review` context block |
+| **Review APPROVE test** | Bot posts PR comment containing `Phase: review` and `Audit result: APPROVE` → verify `review-result-trigger.yml` un-drafts feature PR, applies `implementation-complete` label, posts dual summary comments |
+| **Review REQUEST_CHANGES test** | Bot posts `Phase: review` + `Audit result: REQUEST_CHANGES` → verify `review-result-trigger.yml` dispatches `review-fix-dispatch.yml`; verify fix branch created, fix PR opened with both labels, implement agent assigned |
+| **Review fix complete test** | Merge a review-fix PR → verify `review-fix-complete-trigger.yml` parses context and re-dispatches `review-dispatch.yml` |
+| **Review fix loop cap test** | Simulate 5 REQUEST_CHANGES context blocks on a feature PR → verify `review-result-trigger.yml` halts with error and posts a limit-reached comment instead of dispatching another fix |
 
 For a full acceptance test checklist, see the Testing section in `docs/contributing.md`.

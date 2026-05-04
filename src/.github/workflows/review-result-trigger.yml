@@ -1,0 +1,173 @@
+name: Review Result Trigger (agentic-flow)
+
+on:
+  issue_comment:
+    types: [created]
+
+concurrency:
+  group: review-result-trigger-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  handle-review-result:
+    name: Handle review agent result comment
+    # Must be a bot comment on a PR, containing Phase: review but NOT Phase: review-fix
+    if: >-
+      github.event.issue.pull_request != null &&
+      (github.event.comment.user.type == 'Bot' || endsWith(github.event.comment.user.login, '[bot]')) &&
+      contains(github.event.comment.body, 'Phase: review') &&
+      !contains(github.event.comment.body, 'Phase: review-fix') &&
+      contains(github.event.comment.body, 'Audit result:') &&
+      contains(github.event.comment.body, '<!-- agentic-flow-context')
+    runs-on: ubuntu-latest
+    environment: copilot
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse context block and dispatch next step
+        uses: actions/github-script@v8
+        with:
+          github-token: ${{ secrets.GH_AW_AGENT_TOKEN }}
+          script: |
+            const owner    = context.repo.owner;
+            const repo     = context.repo.repo;
+            const prNumber = context.payload.issue.number;
+            const body     = context.payload.comment.body || '';
+
+            // -- Parse context block fields --
+            const field = (name) => {
+              const m = body.match(new RegExp(`${name}:\\s*(.+)`, 'i'));
+              return m ? m[1].trim() : null;
+            };
+
+            const auditResult      = field('Audit result');
+            const featureIssueStr  = field('Feature issue');
+            const featurePRStr     = field('Feature PR');
+            const specDirectory    = field('Spec directory');
+            const featureBranch    = (field('Feature branch') || '').replace(/`/g, '').trim();
+
+            const featureIssueNum  = featureIssueStr  ? parseInt(featureIssueStr.replace('#', ''))  : null;
+            const featurePRNum     = featurePRStr     ? parseInt(featurePRStr.replace('#', ''))     : null;
+
+            if (!auditResult || !featureIssueNum || !featurePRNum || !specDirectory) {
+              core.setFailed('Missing required fields in review context block. Cannot advance pipeline.');
+              return;
+            }
+
+            // -- Verify PR is still open --
+            const { data: pr } = await github.rest.pulls.get({
+              owner, repo, pull_number: featurePRNum,
+            });
+            if (pr.state !== 'open') {
+              core.warning(`Feature PR #${featurePRNum} is no longer open (state: ${pr.state}). Skipping.`);
+              return;
+            }
+
+            // ================================================================
+            // APPROVE path
+            // ================================================================
+            if (auditResult.trim().toUpperCase() === 'APPROVE') {
+              core.info(`Review APPROVE received for PR #${featurePRNum}. Transitioning to human-merge gate.`);
+
+              // Un-draft the feature PR
+              await github.rest.pulls.update({
+                owner, repo, pull_number: featurePRNum, draft: false,
+              });
+
+              // Apply implementation-complete label
+              await github.rest.issues.addLabels({
+                owner, repo, issue_number: featurePRNum,
+                labels: ['implementation-complete'],
+              });
+
+              // Summary comment on the feature PR
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: featurePRNum,
+                body: [
+                  '## ✅ Review Passed — Ready for Human Merge',
+                  '',
+                  `The automated review for feature PR #${featurePRNum} has **APPROVED** the implementation.`,
+                  '',
+                  '**Next step:** A human reviewer must review and merge this PR. The feature branch is no longer in draft.',
+                  '',
+                  '_agentic-flow review pipeline_',
+                ].join('\n'),
+              });
+
+              // Summary comment on the feature issue
+              if (featureIssueNum) {
+                await github.rest.issues.createComment({
+                  owner, repo, issue_number: featureIssueNum,
+                  body: [
+                    `## ✅ Review Passed — PR #${featurePRNum} Ready for Human Merge`,
+                    '',
+                    `The automated cross-cutting review has approved the implementation. PR #${featurePRNum} is now ready for human review and merge.`,
+                    '',
+                    '_agentic-flow review pipeline_',
+                  ].join('\n'),
+                });
+              }
+              return;
+            }
+
+            // ================================================================
+            // REQUEST_CHANGES path
+            // ================================================================
+            if (auditResult.trim().toUpperCase() === 'REQUEST_CHANGES') {
+              core.info(`Review REQUEST_CHANGES received for PR #${featurePRNum}. Counting iterations.`);
+
+              // Count prior REQUEST_CHANGES context blocks on this PR (including the current comment)
+              const { data: allComments } = await github.rest.issues.listComments({
+                owner, repo, issue_number: featurePRNum, per_page: 100,
+              });
+              const requestChangesCount = allComments.filter(c => {
+                const b = c.body || '';
+                return b.includes('<!-- agentic-flow-context') &&
+                       b.includes('Phase: review') &&
+                       !b.includes('Phase: review-fix') &&
+                       b.includes('Audit result: REQUEST_CHANGES');
+              }).length;
+
+              const MAX_ITERATIONS = 5;
+              if (requestChangesCount >= MAX_ITERATIONS) {
+                core.setFailed(
+                  `Review fix loop exceeded ${MAX_ITERATIONS} iterations for PR #${featurePRNum}. ` +
+                  'Halting pipeline — human intervention required.'
+                );
+                await github.rest.issues.createComment({
+                  owner, repo, issue_number: featurePRNum,
+                  body: [
+                    '## ❌ Review Fix Loop Limit Reached',
+                    '',
+                    `The review fix loop has reached the maximum of **${MAX_ITERATIONS} iterations** without an APPROVE result.`,
+                    '',
+                    '**Action required:** A human must review the outstanding findings and resolve them manually.',
+                    '',
+                    '_agentic-flow review pipeline_',
+                  ].join('\n'),
+                });
+                return;
+              }
+
+              // Dispatch review-fix-dispatch.yml
+              core.info(`Iteration ${requestChangesCount} / ${MAX_ITERATIONS}. Dispatching review-fix-dispatch.`);
+              await github.rest.actions.createWorkflowDispatch({
+                owner, repo,
+                workflow_id: 'review-fix-dispatch.yml',
+                ref: 'main',
+                inputs: {
+                  feature_issue_number: String(featureIssueNum),
+                  feature_pr_number:    String(featurePRNum),
+                  feature_branch:       featureBranch,
+                  spec_directory:       specDirectory,
+                },
+              });
+              return;
+            }
+
+            core.setFailed(`Unrecognised Audit result value: "${auditResult}". Expected APPROVE or REQUEST_CHANGES.`);
