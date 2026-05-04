@@ -56,7 +56,7 @@ safe-outputs:
           type: string
       steps:
         - name: Create task issues and link sub-issues
-          uses: actions/github-script@v9
+          uses: actions/github-script@v8
           env:
             FEATURE_ISSUE_NUMBER: ${{ inputs.feature_issue_number }}
             SPEC_DIRECTORY: ${{ inputs.spec_directory }}

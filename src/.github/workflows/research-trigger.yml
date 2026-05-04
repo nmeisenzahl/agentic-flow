@@ -20,7 +20,7 @@ jobs:
       # Note: research-in-progress label is applied by research.md at the START of its agent body,
       # NOT here. This prevents the label getting stuck if dispatch fails.
       - name: Dispatch research agent
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             await github.rest.actions.createWorkflowDispatch({

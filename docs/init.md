@@ -39,6 +39,13 @@ Create the following labels before first use:
 | `research-complete` | `#0e8a16` | Research findings appended; ready for spec |
 | `spec-in-progress` | `#d93f0b` | Spec is being authored |
 | `ready-to-merge` | `#0e8a16` | Applied automatically by `agentic-flow-tasks` when analyze + checklist pass — merge the PR when ready |
+| `tasks-created` | `#5319e7` | All task sub-issues created — triggers implementation pipeline |
+| `agentic-flow-task` | `#0075ca` | Applied to every task sub-issue |
+| `agentic-flow-audit` | `#e4e669` | Applied to audit/review task sub-issues |
+| `implementing` | `#d93f0b` | Feature issue: implementation phase in progress |
+| `implementation-complete` | `#0e8a16` | Feature issue: all tasks merged; audit phase |
+| `agentic-flow-task-pr` | `#0075ca` | Applied to task PRs targeting the feature branch |
+| `ready-to-merge-task` | `#0e8a16` | Agent signals task PR is ready for auto-merge |
 
 ---
 
@@ -62,6 +69,8 @@ Each agent declares only the tools it requires (least privilege):
 | `agentic-flow-spec` | `create_or_update_file`, `create_issue_comment`, `create_pull_request_review` | — |
 | `agentic-flow-plan` | `create_or_update_file`, `create_issue_comment`, `create_pull_request_review` | — |
 | `agentic-flow-tasks` | `create_or_update_file`, `create_issue_comment`, `create_pull_request_review` | `issue_write` |
+| `agentic-flow-implement` | `create_or_update_file`, `create_issue_comment` | `issue_write` |
+| `agentic-flow-audit` | `create_issue_comment`, `create_pull_request_review` | `issue_write` |
 
 All three agents connect to `https://api.githubcopilot.com/mcp/` using `COPILOT_MCP_GITHUB_WRITE_TOKEN` from the `copilot` environment (see §5b).
 
@@ -131,7 +140,7 @@ The `GITHUB_TOKEN` used by workflows needs the following scopes at runtime (set 
 
 ### GH_AW_AGENT_TOKEN
 
-`GH_AW_AGENT_TOKEN` is a fine-grained PAT required by the custom PR assignment workaround used in `plan.md`, `refine.md`, and `tasks.md`. Those workflows use it to reassign Copilot on the spec PR and post the startup `@copilot` comment that launches the wrapper agent. The `/start-spec` flow continues to use the built-in sub-issue assignment path. Without this secret, the PR-based wrapper handoff cannot launch.
+`GH_AW_AGENT_TOKEN` is a fine-grained PAT required by the custom PR assignment workaround used in `plan.md`, `refine.md`, `tasks.md`, `implement-dispatch.yml`, `audit-dispatch.yml`, `audit-chain-trigger.yml`, and `rerun-audit-trigger.yml`. Those workflows use it to reassign Copilot on the spec PR and post the startup `@copilot` comment that launches the wrapper agent. The `/start-spec` flow continues to use the built-in sub-issue assignment path. Without this secret, the PR-based wrapper handoff cannot launch.
 
 This same token is also used as the underlying PAT for `COPILOT_MCP_GITHUB_WRITE_TOKEN` (see §5b).
 
@@ -140,7 +149,9 @@ This same token is also used as the underlying PAT for `COPILOT_MCP_GITHUB_WRITE
 1. Go to **Settings → Developer settings → Personal access tokens → Fine-grained tokens**
 2. Click **Generate new token**
 3. Scope the token to this repository
-4. Grant **Repository permissions**: Actions (Write), Contents (Write), Issues (Write), Pull requests (Write)
+4. Grant **Repository permissions**: Actions (Write), Contents (Write), Issues (Write), Pull requests (Write), Workflows (Write)
+
+> **Workflows permission is required.** `implement-trigger.yml` pushes the feature branch which contains `.github/workflows/` files. GitHub blocks any token — including GITHUB_TOKEN — from pushing branches that touch workflow files unless it explicitly has the `workflow` scope (classic PAT) or "Workflows: Read and write" (fine-grained PAT). Without this permission, feature branch creation fails with `refusing to allow a Personal Access Token to create or update workflow ... without workflow scope`.
 
 **Add to repository**:
 
@@ -191,7 +202,7 @@ The framework ships `copilot-setup-steps.yml` in `.github/workflows/`. This work
 On the `main` branch (Settings → Branches → Add rule):
 
 - **Require a pull request before merging:** enabled
-  - Require approvals: 0 (auto-merge handles this via labels + CI)
+  - Require approvals: 0 for the feature branch (task PRs are auto-merged by the pipeline; the feature PR requires human approval before merging to `main`)
 - **Require status checks to pass:** enabled
   - Add your CI check names once they exist
 - **Require branches to be up to date:** enabled

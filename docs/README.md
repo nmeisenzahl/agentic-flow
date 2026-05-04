@@ -12,6 +12,9 @@ agentic-flow automates specification and planning for every feature:
 4. **Plan** — Generates `plan.md` with architecture decisions
 5. **Tasks** — Generates `tasks.md` with dependency graph
 6. **Post-merge** — Creates Task sub-issues linked to the Feature issue
+7. **Implementation** — Triggered automatically by the `tasks-created` label. Creates a feature branch, opens a draft PR, and dispatches `agentic-flow-implement` for each task sub-issue in dependency order. Each task gets its own branch and auto-merging task PR targeting the feature branch.
+8. **Audit** — Once all implementation tasks are merged, dispatches `agentic-flow-audit` to review the complete feature branch diff against each audit task sub-issue. Audit agents post formal PR reviews and close audit issues.
+9. **Human Merge** — After all audits pass, the feature PR is marked ready for human review. A human reviews and merges the feature PR to `main`, closing the feature issue.
 
 ## Getting Started
 

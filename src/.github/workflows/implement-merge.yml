@@ -1,0 +1,445 @@
+name: Implement Merge (agentic-flow)
+on:
+  pull_request:
+    types: [labeled]
+  check_run:
+    types: [completed]
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  actions: write
+
+concurrency:
+  group: implement-merge-${{ github.event.pull_request.head.sha || github.event.check_run.head_sha }}
+  cancel-in-progress: false
+
+jobs:
+  merge-task-pr:
+    if: |
+      (github.event_name == 'pull_request') ||
+      (github.event_name == 'check_run' && (startsWith(github.event.check_run.check_suite.head_branch, 'implement/') || startsWith(github.event.check_run.check_suite.head_branch, 'task/') || startsWith(github.event.check_run.check_suite.head_branch, 'review-fix/')))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+      actions: write
+      checks: read
+    steps:
+      - name: Resolve task PR and verify eligibility
+        id: resolve
+        uses: actions/github-script@v9
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const owner = context.repo.owner;
+            const repo  = context.repo.repo;
+
+            let taskPRNumber;
+
+            if (context.eventName === 'pull_request') {
+              // Fired when agent applies ready-to-merge-task label
+              if (context.payload.label?.name !== 'ready-to-merge-task') {
+                core.info('Not a ready-to-merge-task label event; skipping.');
+                core.setOutput('skip', 'true');
+                return;
+              }
+              taskPRNumber = context.payload.pull_request.number;
+            } else if (context.eventName === 'check_run') {
+              // Fired when CI completes — find associated PR with ready-to-merge-task label
+              const prs = context.payload.check_run.pull_requests || [];
+              if (prs.length === 0) {
+                core.info('check_run has no associated PRs; skipping.');
+                core.setOutput('skip', 'true');
+                return;
+              }
+              for (const pr of prs) {
+                const { data: prData } = await github.rest.pulls.get({ owner, repo, pull_number: pr.number });
+                if (prData.labels?.some(l => l.name === 'ready-to-merge-task') && prData.state === 'open') {
+                  taskPRNumber = pr.number;
+                  break;
+                }
+              }
+              if (!taskPRNumber) {
+                core.info('No open PR with ready-to-merge-task found for this check_run; skipping.');
+                core.setOutput('skip', 'true');
+                return;
+              }
+            } else {
+              core.setOutput('skip', 'true');
+              return;
+            }
+
+            // Fetch full PR details
+            const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: taskPRNumber });
+
+            if (pr.state !== 'open') {
+              core.info(`PR #${taskPRNumber} is not open (state: ${pr.state}); skipping.`);
+              core.setOutput('skip', 'true');
+              return;
+            }
+
+            if (!pr.labels?.some(l => l.name === 'ready-to-merge-task')) {
+              core.info(`PR #${taskPRNumber} does not have ready-to-merge-task label; skipping.`);
+              core.setOutput('skip', 'true');
+              return;
+            }
+
+            // Check mergeability via GraphQL (no conflicts) + check runs (no CI failures).
+            // Avoid mergeStateStatus — GitHub marks it UNSTABLE when the Commit Status API
+            // returns 'pending' with 0 entries (happens in repos with no legacy CI config).
+            const mergeableQuery = `
+              query($owner: String!, $repo: String!, $pr: Int!) {
+                repository(owner: $owner, name: $repo) {
+                  pullRequest(number: $pr) { mergeable }
+                }
+              }`;
+            let gqlResult = await github.graphql(mergeableQuery, { owner, repo, pr: taskPRNumber });
+            let mergeable = gqlResult.repository.pullRequest.mergeable;
+            if (!mergeable || mergeable === 'UNKNOWN') {
+              await new Promise(resolve => setTimeout(resolve, 6000));
+              gqlResult = await github.graphql(mergeableQuery, { owner, repo, pr: taskPRNumber });
+              mergeable = gqlResult.repository.pullRequest.mergeable;
+            }
+            core.info(`PR #${taskPRNumber} mergeable: ${mergeable}`);
+
+            if (mergeable !== 'MERGEABLE') {
+              core.info(`PR #${taskPRNumber} not mergeable (${mergeable}); skipping.`);
+              core.setOutput('skip', 'true');
+              return;
+            }
+
+            // Use a pass allowlist (not a failure denylist) to correctly handle pending/in-progress
+            // checks — don't merge until ALL relevant checks have completed successfully.
+            // Filter out this workflow's own check suite to avoid self-blocking.
+            // The check run job name ('merge-task-pr') differs from the workflow name,
+            // so we use the check_suite_id to reliably identify and exclude our own run.
+            const headSha = pr.head.sha;
+            const { data: runData } = await github.rest.actions.getWorkflowRun({
+              owner, repo, run_id: context.runId,
+            });
+            const ownCheckSuiteId = runData.check_suite_id;
+            const { data: checkRuns } = await github.rest.checks.listForRef({
+              owner, repo, ref: headSha, per_page: 100,
+            });
+            const relevantChecks = checkRuns.check_runs.filter(c =>
+              !c.check_suite || c.check_suite.id !== ownCheckSuiteId
+            );
+            if (relevantChecks.length > 0) {
+              const pendingChecks = relevantChecks.filter(c => c.status !== 'completed');
+              if (pendingChecks.length > 0) {
+                core.info(`Checks still pending (${pendingChecks.map(c => c.name).join(', ')}); waiting for CI completion.`);
+                core.setOutput('skip', 'true');
+                return;
+              }
+              const passConclusions = new Set(['success', 'neutral', 'skipped']);
+              const failedChecks = relevantChecks.filter(c => !passConclusions.has(c.conclusion));
+              if (failedChecks.length > 0) {
+                const ciFailMarker = `<!-- agentic-flow-ci-fail:${headSha} -->`;
+                const { data: existingComments } = await github.rest.issues.listComments({
+                  owner, repo, issue_number: taskPRNumber, per_page: 100,
+                });
+                if (!existingComments.some(c => (c.body || '').includes(ciFailMarker))) {
+                  const failList = failedChecks.map(c => `- ${c.name}: ${c.conclusion}`).join('\n');
+                  await github.rest.issues.createComment({
+                    owner, repo, issue_number: taskPRNumber,
+                    body: [
+                      ciFailMarker,
+                      '## ❌ Task PR — CI Failed',
+                      '',
+                      'The following checks failed on this task PR. Auto-merge is blocked.',
+                      '',
+                      failList,
+                      '',
+                      '_agentic-flow implementation pipeline_',
+                    ].join('\n'),
+                  });
+                }
+                core.setOutput('skip', 'true');
+                return;
+              }
+            }
+            // Zero relevant checks (no CI configured) OR all checks passed → proceed with merge
+
+            // Extract context from PR body
+            const body = pr.body || '';
+            const featureIssueMatch = body.match(/\*\*Feature issue:\*\*\s*#(\d+)/);
+            const featurePRMatch    = body.match(/\*\*Feature PR:\*\*\s*#(\d+)/);
+            const taskIssueMatch    = body.match(/\*\*Task issue:\*\*\s*#(\d+)/);
+            const specDirMatch      = body.match(/\*\*Spec directory:\*\*\s*`([^`]+)`/);
+
+            if (!featureIssueMatch || !featurePRMatch || !taskIssueMatch || !specDirMatch) {
+              core.setFailed(`Could not parse required context from PR #${taskPRNumber} body. Expected Feature issue, Feature PR, Task issue, Spec directory fields.`);
+              return;
+            }
+
+            core.setOutput('skip',                 'false');
+            core.setOutput('task_pr_number',       String(taskPRNumber));
+            core.setOutput('feature_issue_number', featureIssueMatch[1]);
+            core.setOutput('feature_pr_number',    featurePRMatch[1]);
+            core.setOutput('task_issue_number',    taskIssueMatch[1]);
+            core.setOutput('spec_directory',       specDirMatch[1]);
+            core.setOutput('feature_branch',       pr.base.ref);
+            core.setOutput('task_branch',          pr.head.ref);
+            core.setOutput('head_sha',             pr.head.sha);
+            core.setOutput('task_pr_labels',       JSON.stringify(pr.labels?.map(l => l.name) || []));
+
+      - name: Merge task PR into feature branch
+        id: merge
+        if: steps.resolve.outputs.skip != 'true'
+        uses: actions/github-script@v9
+        with:
+          github-token: ${{ secrets.GH_AW_AGENT_TOKEN }}
+          script: |
+            const owner        = context.repo.owner;
+            const repo         = context.repo.repo;
+            const taskPRNumber = Number('${{ steps.resolve.outputs.task_pr_number }}');
+            const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: taskPRNumber });
+
+            // Idempotency: another concurrent run may have already merged this PR
+            if (pr.state !== 'open') {
+              core.info(`PR #${taskPRNumber} is already ${pr.state}; skipping merge.`);
+              core.setOutput('merged', 'false');
+              return;
+            }
+
+            // Guard against zero-diff task PRs (Copilot failed to commit anything)
+            const { data: prFiles } = await github.rest.pulls.listFiles({
+              owner, repo, pull_number: taskPRNumber, per_page: 1,
+            });
+            if (prFiles.length === 0) {
+              const taskIssueNum = Number('${{ steps.resolve.outputs.task_issue_number }}');
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: taskPRNumber,
+                body: [
+                  `<!-- agentic-flow-zero-diff:${pr.head.sha} -->`,
+                  '## ⚠️ Task PR — No Changes',
+                  '',
+                  'This task PR has no file changes. The task will be closed as superseded.',
+                  '',
+                  '_To retry, re-dispatch `implement-dispatch.yml` for this task._',
+                  '',
+                  '_agentic-flow implementation pipeline_',
+                ].join('\n'),
+              });
+              await github.rest.pulls.update({ owner, repo, pull_number: taskPRNumber, state: 'closed' });
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: taskIssueNum,
+                body: [
+                  '## ⚠️ Task Superseded — No Changes',
+                  '',
+                  `Task PR #${taskPRNumber} contained no file changes and was closed.`,
+                  '',
+                  '_To retry: re-dispatch `implement-dispatch.yml` for this task._',
+                  '',
+                  '_agentic-flow implementation pipeline_',
+                ].join('\n'),
+              });
+              await github.rest.issues.update({ owner, repo, issue_number: taskIssueNum, state: 'closed' });
+              core.setOutput('merged', 'false');
+              return;
+            }
+
+            const { data: merge } = await github.rest.pulls.merge({
+              owner, repo,
+              pull_number: taskPRNumber,
+              merge_method: 'squash',
+              commit_title: `${pr.title} (#${taskPRNumber})`,
+              commit_message: `Auto-merged by agentic-flow implement-merge workflow.\n\nTask: #${{ steps.resolve.outputs.task_issue_number }}\nFeature: #${{ steps.resolve.outputs.feature_issue_number }}`,
+            });
+
+            if (!merge.merged) {
+              core.setFailed(`Merge API returned merged=false for PR #${taskPRNumber}: ${merge.message}`);
+              return;
+            }
+
+            core.info(`Merged task PR #${taskPRNumber}: ${merge.message}`);
+            core.setOutput('merged', 'true');
+
+      - name: Close task issue with summary
+        if: steps.resolve.outputs.skip != 'true' && steps.merge.outputs.merged == 'true' && !contains(steps.resolve.outputs.task_pr_labels, 'agentic-flow-review-fix-pr')
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const owner           = context.repo.owner;
+            const repo            = context.repo.repo;
+            const taskIssueNumber = Number('${{ steps.resolve.outputs.task_issue_number }}');
+            const taskPRNumber    = Number('${{ steps.resolve.outputs.task_pr_number }}');
+            const featureIssue    = '${{ steps.resolve.outputs.feature_issue_number }}';
+
+            await github.rest.issues.createComment({
+              owner, repo, issue_number: taskIssueNumber,
+              body: [
+                '## ✅ Task Implemented and Merged',
+                '',
+                `Task PR #${taskPRNumber} was auto-merged into the feature branch.`,
+                '',
+                `**Feature:** #${featureIssue}`,
+                `**Task PR:** #${taskPRNumber}`,
+                '',
+                '_agentic-flow implementation pipeline_',
+              ].join('\n'),
+            });
+
+            await github.rest.issues.update({
+              owner, repo, issue_number: taskIssueNumber, state: 'closed',
+            });
+
+      - name: Update feature issue progress
+        if: steps.resolve.outputs.skip != 'true' && steps.merge.outputs.merged == 'true'
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const owner              = context.repo.owner;
+            const repo               = context.repo.repo;
+            const featureIssueNumber = Number('${{ steps.resolve.outputs.feature_issue_number }}');
+            const taskIssueNumber    = Number('${{ steps.resolve.outputs.task_issue_number }}');
+            const taskPRNumber       = Number('${{ steps.resolve.outputs.task_pr_number }}');
+
+            await github.rest.issues.createComment({
+              owner, repo, issue_number: featureIssueNumber,
+              body: [
+                `## ✅ Task #${taskIssueNumber} Complete`,
+                '',
+                `Task PR #${taskPRNumber} was auto-merged into the feature branch.`,
+                '',
+                '_agentic-flow implementation pipeline_',
+              ].join('\n'),
+            });
+
+      - name: Find next task or dispatch audit
+        if: steps.resolve.outputs.skip != 'true' && steps.merge.outputs.merged == 'true' && !contains(steps.resolve.outputs.task_pr_labels, 'agentic-flow-review-fix-pr')
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const owner              = context.repo.owner;
+            const repo               = context.repo.repo;
+            const featureIssueNumber = Number('${{ steps.resolve.outputs.feature_issue_number }}');
+            const featurePRNumber    = '${{ steps.resolve.outputs.feature_pr_number }}';
+            const featureBranch      = '${{ steps.resolve.outputs.feature_branch }}';
+            const specDirectory      = '${{ steps.resolve.outputs.spec_directory }}';
+
+            let subIssues = [];
+            try {
+              const { data } = await github.request(
+                'GET /repos/{owner}/{repo}/issues/{issue_number}/sub_issues',
+                { owner, repo, issue_number: featureIssueNumber }
+              );
+              subIssues = data || [];
+            } catch (e) {
+              core.setFailed(`Could not fetch sub-issues: ${e.message}`);
+              return;
+            }
+
+            const openImplTasks = subIssues.filter(si =>
+              si.labels?.some(l => l.name === 'agentic-flow-task') &&
+              !si.labels?.some(l => l.name === 'agentic-flow-audit') &&
+              si.state === 'open'
+            );
+
+            if (openImplTasks.length > 0) {
+              // Build dependency map for remaining tasks
+              const depMap = new Map();
+              for (const task of openImplTasks) {
+                const deps = new Set();
+                try {
+                  const { data: detail } = await github.rest.issues.get({ owner, repo, issue_number: task.number });
+                  const body = detail.body || '';
+                  const match = body.match(/\|\s*\*\*Depends on\*\*\s*\|\s*([^|\n]+)\|/);
+                  if (match) {
+                    for (const ref of match[1].matchAll(/#(\d+)/g)) deps.add(Number(ref[1]));
+                  }
+                } catch (e) {
+                  core.warning(`Could not fetch issue #${task.number}: ${e.message}`);
+                }
+                depMap.set(task.number, deps);
+              }
+
+              const closedNumbers = new Set(
+                subIssues.filter(si =>
+                  si.labels?.some(l => l.name === 'agentic-flow-task') &&
+                  !si.labels?.some(l => l.name === 'agentic-flow-audit') &&
+                  si.state === 'closed'
+                ).map(si => si.number)
+              );
+
+              const readyTask = openImplTasks.find(task =>
+                [...(depMap.get(task.number) || new Set())].every(dep => closedNumbers.has(dep))
+              );
+
+              if (readyTask) {
+                core.info(`Next task: #${readyTask.number}. Dispatching implement-dispatch.`);
+                await github.rest.actions.createWorkflowDispatch({
+                  owner, repo,
+                  workflow_id: 'implement-dispatch.yml',
+                  ref: 'main',
+                  inputs: {
+                    feature_issue_number: String(featureIssueNumber),
+                    feature_pr_number:    featurePRNumber,
+                    feature_branch:       featureBranch,
+                    task_issue_number:    String(readyTask.number),
+                    spec_directory:       specDirectory,
+                  },
+                });
+              } else {
+                core.warning('Open implementation tasks exist but none are ready (dependency cycle or unresolved deps). Halting dispatch.');
+              }
+              return;
+            }
+
+            // All implementation tasks done — transition to audit or done
+            core.info('All implementation tasks complete.');
+
+            const openAuditTasks = subIssues.filter(si =>
+              si.labels?.some(l => l.name === 'agentic-flow-audit') && si.state === 'open'
+            );
+
+            if (openAuditTasks.length > 0) {
+              core.info(`Dispatching audit for first open audit task #${openAuditTasks[0].number}.`);
+              await github.rest.actions.createWorkflowDispatch({
+                owner, repo,
+                workflow_id: 'audit-dispatch.yml',
+                ref: 'main',
+                inputs: {
+                  feature_issue_number:    String(featureIssueNumber),
+                  feature_pr_number:       featurePRNumber,
+                  feature_branch:          featureBranch,
+                  audit_task_issue_number: String(openAuditTasks[0].number),
+                  spec_directory:          specDirectory,
+                  first_audit:             'true',
+                },
+              });
+            } else {
+              // No audit tasks — mark feature PR ready for human merge
+              core.info('No audit tasks. Converting feature PR from draft and marking implementation complete.');
+              await github.rest.pulls.update({
+                owner, repo, pull_number: Number(featurePRNumber), draft: false,
+              });
+              await github.rest.issues.addLabels({
+                owner, repo, issue_number: featureIssueNumber, labels: ['implementation-complete'],
+              });
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: featureIssueNumber,
+                body: [
+                  '## 🎉 All Tasks Implemented',
+                  '',
+                  'All implementation tasks have been auto-merged into the feature branch. No audit tasks were defined.',
+                  '',
+                  `**Feature PR #${featurePRNumber}** is now ready for human review and merge.`,
+                  '',
+                  '_agentic-flow implementation pipeline_',
+                ].join('\n'),
+              });
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: Number(featurePRNumber),
+                body: [
+                  '## 🎉 Ready for Human Review',
+                  '',
+                  'All implementation tasks have been auto-merged. This PR is ready for human review and merge to `main`.',
+                  '',
+                  '_agentic-flow implementation pipeline_',
+                ].join('\n'),
+              });
+            }

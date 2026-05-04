@@ -1,0 +1,182 @@
+name: Implement Dispatch (agentic-flow)
+
+on:
+  workflow_dispatch:
+    inputs:
+      feature_issue_number:
+        description: 'Feature issue number'
+        required: true
+      feature_pr_number:
+        description: 'Feature PR number'
+        required: true
+      feature_branch:
+        description: 'Feature branch name (e.g. implement/001-my-feature)'
+        required: true
+      task_issue_number:
+        description: 'Task issue number to implement'
+        required: true
+      spec_directory:
+        description: 'Spec directory (e.g. specs/001-my-feature)'
+        required: true
+
+concurrency:
+  group: implement-dispatch-${{ github.event.inputs.task_issue_number }}
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    name: Create task branch, open task PR, assign implement agent
+    runs-on: ubuntu-latest
+    environment: copilot
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Create task branch and open task PR
+        id: setup
+        uses: actions/github-script@v9
+        with:
+          github-token: ${{ secrets.GH_AW_AGENT_TOKEN }}
+          script: |
+            const owner = context.repo.owner;
+            const repo  = context.repo.repo;
+
+            const featureIssue  = '${{ github.event.inputs.feature_issue_number }}';
+            const featurePR     = '${{ github.event.inputs.feature_pr_number }}';
+            const featureBranch = '${{ github.event.inputs.feature_branch }}';
+            const taskIssue     = '${{ github.event.inputs.task_issue_number }}';
+            const specDir       = '${{ github.event.inputs.spec_directory }}';
+
+            // ── Skip if task issue is already closed ─────────────────────────────
+            const { data: issue } = await github.rest.issues.get({
+              owner, repo, issue_number: parseInt(taskIssue),
+            });
+            if (issue.state === 'closed') {
+              core.info(`Task issue #${taskIssue} is already closed — skipping dispatch.`);
+              core.setOutput('skip', 'true');
+              return;
+            }
+
+            // ── Extract task ID from issue title (e.g. "T001: …") ────────────────
+            const taskIdMatch = issue.title.match(/^(T\d+)[\s:]/);
+            const taskId = taskIdMatch ? taskIdMatch[1] : `T${String(taskIssue).padStart(3, '0')}`;
+            core.info(`Task ID: ${taskId} — "${issue.title}"`);
+
+            // ── Get feature branch HEAD SHA ──────────────────────────────────────
+            // getRef uses {ref+} so slashes pass through unencoded
+            const { data: ref } = await github.rest.git.getRef({
+              owner, repo, ref: `heads/${featureBranch}`,
+            });
+            const featureSHA = ref.object.sha;
+            core.info(`Feature branch HEAD: ${featureSHA}`);
+
+            // ── Create task branch (idempotent) ──────────────────────────────────
+            // Use task/ prefix (not featureBranch/) to avoid git ref namespace conflict:
+            // refs/heads/implement/foo and refs/heads/implement/foo/T001 can't coexist.
+            const branchSuffix = featureBranch.replace(/^implement\//, '');
+            const taskBranch = `task/${branchSuffix}/${taskId}`;
+            let taskBranchSHA = featureSHA;
+            try {
+              await github.rest.git.createRef({
+                owner, repo, ref: `refs/heads/${taskBranch}`, sha: featureSHA,
+              });
+              core.info(`Created task branch: ${taskBranch}`);
+            } catch (err) {
+              if (err.status === 422) {
+                core.info(`Task branch already exists: ${taskBranch}`);
+                // git.getRef encodes slashes → 404 on multi-segment branch names; use listMatchingRefs instead
+                const { data: refs } = await github.rest.git.listMatchingRefs({
+                  owner, repo, ref: `heads/${taskBranch}`,
+                });
+                const match = refs.find(r => r.ref === `refs/heads/${taskBranch}`);
+                taskBranchSHA = match ? match.object.sha : featureSHA;
+              } else {
+                throw err;
+              }
+            }
+
+            // ── Add empty init commit so task PR can be opened (branches must differ) ─
+            if (taskBranchSHA === featureSHA) {
+              const { data: parentCommit } = await github.rest.git.getCommit({
+                owner, repo, commit_sha: featureSHA,
+              });
+              const { data: emptyCommit } = await github.rest.git.createCommit({
+                owner, repo,
+                message: `chore: init task branch for #${taskIssue} [skip ci]`,
+                tree: parentCommit.tree.sha,
+                parents: [featureSHA],
+              });
+              // updateRef encodes slashes in ref path param → use literal URL to avoid %2F
+              await github.request(`PATCH /repos/${owner}/${repo}/git/refs/heads/${taskBranch}`, {
+                sha: emptyCommit.sha, force: false,
+              });
+              taskBranchSHA = emptyCommit.sha;
+              core.info(`Created empty init commit on task branch: ${emptyCommit.sha}`);
+            }
+
+            // ── Find or create task PR (check all states to avoid duplicate) ─────
+            const { data: existingPRs } = await github.rest.pulls.list({
+              owner, repo, head: `${owner}:${taskBranch}`, base: featureBranch, state: 'all',
+            });
+
+            const openPR   = existingPRs.find(p => p.state === 'open');
+            const mergedPR = existingPRs.find(p => p.state === 'closed' && p.merged_at);
+
+            if (mergedPR) {
+              core.info(`Task PR #${mergedPR.number} was already merged — task issue should have been closed. Skipping.`);
+              core.setOutput('skip', 'true');
+              return;
+            }
+
+            let taskPR;
+            if (openPR) {
+              taskPR = openPR;
+              core.info(`Reusing existing open task PR: #${taskPR.number}`);
+            } else {
+              const prTitle = `[${taskId}] ${issue.title.replace(/^T\d+[\s:]*/, '').trim()}`;
+              const prBody  = [
+                `Implements task #${taskIssue} for feature #${featureIssue}.`,
+                '',
+                `**Feature issue:** #${featureIssue}`,
+                `**Feature PR:** #${featurePR}`,
+                `**Task issue:** #${taskIssue}`,
+                `**Spec directory:** \`${specDir}\``,
+              ].join('\n');
+              const { data: newPR } = await github.rest.pulls.create({
+                owner, repo, title: prTitle, body: prBody, head: taskBranch, base: featureBranch,
+              });
+              taskPR = newPR;
+              core.info(`Created task PR: #${taskPR.number}`);
+            }
+
+            // ── Apply label ──────────────────────────────────────────────────────
+            try {
+              await github.rest.issues.addLabels({
+                owner, repo, issue_number: taskPR.number, labels: ['agentic-flow-task-pr'],
+              });
+            } catch (err) {
+              core.warning(`Could not apply label: ${err.message}`);
+            }
+
+            core.setOutput('skip',           'false');
+            core.setOutput('task_pr_number', String(taskPR.number));
+            core.setOutput('task_branch',    taskBranch);
+            core.setOutput('task_id',        taskId);
+
+      - name: Assign implement agent to task PR
+        if: steps.setup.outputs.skip != 'true'
+        uses: ./.github/actions/assign-pr-agent
+        with:
+          stage-name: implement
+          agent-name: agentic-flow-implement
+          context-source: direct
+          pull-number: ${{ steps.setup.outputs.task_pr_number }}
+          feature-issue-number: ${{ github.event.inputs.feature_issue_number }}
+          feature-pr-number: ${{ github.event.inputs.feature_pr_number }}
+          spec-directory: ${{ github.event.inputs.spec_directory }}
+          task-issue-number: ${{ github.event.inputs.task_issue_number }}
+          agent-token: ${{ secrets.GH_AW_AGENT_TOKEN }}

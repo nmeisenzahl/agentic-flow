@@ -1,0 +1,134 @@
+name: Rerun Audit Trigger (agentic-flow)
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+  actions: write
+
+jobs:
+  rerun-audit:
+    if: startsWith(github.event.comment.body, '/rerun-audit') && github.event.issue.pull_request != null
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+      actions: write
+    steps:
+      - name: Resolve feature context from feature PR
+        id: context
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const owner      = context.repo.owner;
+            const repo       = context.repo.repo;
+            const prNumber   = context.issue.number;
+            const commentId  = context.payload.comment.id;
+
+            // React to acknowledge command
+            try {
+              await github.rest.reactions.createForIssueComment({
+                owner, repo, comment_id: commentId, content: 'eyes',
+              });
+            } catch (e) {
+              core.warning(`Could not react to comment: ${e.message}`);
+            }
+
+            const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: prNumber });
+
+            const body = pr.body || '';
+            const featureIssueMatch = body.match(/feature #(\d+)/i) || body.match(/\*\*Feature issue:\*\*\s*#(\d+)/);
+            const specDirMatch      = body.match(/\*\*Spec directory:\*\*\s*`([^`]+)`/);
+
+            if (!featureIssueMatch || !specDirMatch) {
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: prNumber,
+                body: '❌ `/rerun-audit` failed: could not parse feature issue number or spec directory from this PR body. Is this a feature implementation PR?',
+              });
+              core.setFailed('Could not parse context from PR body.');
+              return;
+            }
+
+            core.setOutput('feature_issue_number', featureIssueMatch[1]);
+            core.setOutput('spec_directory',       specDirMatch[1]);
+            core.setOutput('feature_pr_number',    String(prNumber));
+            core.setOutput('feature_branch',       pr.head.ref);
+
+      - name: Find first open audit task
+        id: find-audit
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const owner              = context.repo.owner;
+            const repo               = context.repo.repo;
+            const featureIssueNumber = Number('${{ steps.context.outputs.feature_issue_number }}');
+            const prNumber           = Number('${{ steps.context.outputs.feature_pr_number }}');
+
+            let subIssues = [];
+            try {
+              const { data } = await github.request(
+                'GET /repos/{owner}/{repo}/issues/{issue_number}/sub_issues',
+                { owner, repo, issue_number: featureIssueNumber }
+              );
+              subIssues = data || [];
+            } catch (e) {
+              core.setFailed(`Could not fetch sub-issues: ${e.message}`);
+              return;
+            }
+
+            const openAuditTasks = subIssues.filter(si =>
+              si.labels?.some(l => l.name === 'agentic-flow-audit') && si.state === 'open'
+            );
+
+            if (openAuditTasks.length === 0) {
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: prNumber,
+                body: '❌ `/rerun-audit`: No open audit tasks found for this feature. All audit tasks are already closed.',
+              });
+              core.setFailed('No open audit tasks found.');
+              return;
+            }
+
+            core.info(`Found ${openAuditTasks.length} open audit task(s). Re-dispatching first: #${openAuditTasks[0].number}.`);
+            core.setOutput('audit_task_issue_number', String(openAuditTasks[0].number));
+
+      - name: Dispatch audit
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const owner                  = context.repo.owner;
+            const repo                   = context.repo.repo;
+            const featureIssueNumber     = '${{ steps.context.outputs.feature_issue_number }}';
+            const featurePRNumber        = '${{ steps.context.outputs.feature_pr_number }}';
+            const featureBranch          = '${{ steps.context.outputs.feature_branch }}';
+            const specDirectory          = '${{ steps.context.outputs.spec_directory }}';
+            const auditTaskIssueNumber   = '${{ steps.find-audit.outputs.audit_task_issue_number }}';
+
+            await github.rest.actions.createWorkflowDispatch({
+              owner, repo,
+              workflow_id: 'audit-dispatch.yml',
+              ref: 'main',
+              inputs: {
+                feature_issue_number:     featureIssueNumber,
+                feature_pr_number:        featurePRNumber,
+                feature_branch:           featureBranch,
+                audit_task_issue_number:  auditTaskIssueNumber,
+                spec_directory:           specDirectory,
+                first_audit:              'false',
+              },
+            });
+
+            await github.rest.issues.createComment({
+              owner, repo, issue_number: Number(featurePRNumber),
+              body: [
+                `🔄 **/rerun-audit** triggered for audit task #${auditTaskIssueNumber}.`,
+                '',
+                'Assigning Copilot to re-review the feature PR...',
+                '',
+                '_agentic-flow implementation pipeline_',
+              ].join('\n'),
+            });

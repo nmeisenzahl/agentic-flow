@@ -1,0 +1,83 @@
+name: Review Dispatch (agentic-flow)
+
+on:
+  workflow_dispatch:
+    inputs:
+      feature_issue_number:
+        description: 'Feature issue number'
+        required: true
+      feature_pr_number:
+        description: 'Feature PR number'
+        required: true
+      feature_branch:
+        description: 'Feature branch name (e.g. implement/001-my-feature)'
+        required: false
+        default: ''
+      spec_directory:
+        description: 'Spec directory (e.g. specs/001-my-feature)'
+        required: true
+
+concurrency:
+  group: review-dispatch-${{ github.event.inputs.feature_pr_number }}
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    name: Validate and assign review agent to feature PR
+    runs-on: ubuntu-latest
+    environment: copilot
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Validate feature PR and check idempotency
+        id: validate
+        uses: actions/github-script@v9
+        with:
+          github-token: ${{ secrets.GH_AW_AGENT_TOKEN }}
+          script: |
+            const owner        = context.repo.owner;
+            const repo         = context.repo.repo;
+            const featurePRNum = parseInt('${{ github.event.inputs.feature_pr_number }}');
+
+            // Verify the feature PR is still open
+            const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: featurePRNum });
+            if (pr.state !== 'open') {
+              core.warning(`Feature PR #${featurePRNum} is not open (state: ${pr.state}); skipping review dispatch.`);
+              core.setOutput('skip', 'true');
+              return;
+            }
+
+            // Idempotency: check if a review APPROVE context block already exists on this PR
+            const { data: comments } = await github.rest.issues.listComments({
+              owner, repo, issue_number: featurePRNum, per_page: 100,
+            });
+            const alreadyApproved = comments.some(c => {
+              const b = c.body || '';
+              return b.includes('<!-- agentic-flow-context') &&
+                     b.includes('Phase: review') &&
+                     b.includes('Audit result: APPROVE');
+            });
+            if (alreadyApproved) {
+              core.warning(`Feature PR #${featurePRNum} already has a review APPROVE context block; skipping re-dispatch.`);
+              core.setOutput('skip', 'true');
+              return;
+            }
+
+            core.setOutput('skip', 'false');
+
+      - name: Assign review agent to feature PR
+        if: steps.validate.outputs.skip != 'true'
+        uses: ./.github/actions/assign-pr-agent
+        with:
+          stage-name: review
+          agent-name: agentic-flow-review
+          context-source: direct
+          pull-number: ${{ github.event.inputs.feature_pr_number }}
+          feature-issue-number: ${{ github.event.inputs.feature_issue_number }}
+          spec-directory: ${{ github.event.inputs.spec_directory }}
+          agent-token: ${{ secrets.GH_AW_AGENT_TOKEN }}

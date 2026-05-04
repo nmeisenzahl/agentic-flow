@@ -35,7 +35,7 @@ safe-outputs:
           type: string
       steps:
         - name: Checkout repository
-          uses: actions/checkout@v4
+          uses: actions/checkout@v6
         - name: Assign agentic-flow-plan wrapper
           uses: ./.github/actions/assign-pr-agent
           with:

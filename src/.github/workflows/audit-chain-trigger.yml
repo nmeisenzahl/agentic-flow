@@ -1,0 +1,203 @@
+name: Audit Chain Trigger (agentic-flow)
+on:
+  issues:
+    types: [closed]
+
+permissions:
+  contents: read
+  issues: read
+  actions: write
+
+jobs:
+  chain-next-audit:
+    if: contains(github.event.issue.labels.*.name, 'agentic-flow-audit')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+      actions: write
+    steps:
+      - name: Parse feature issue from closed audit issue
+        id: parse
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo  = context.repo.repo;
+            const auditIssueNumber = context.issue.number;
+
+            const { data: auditIssue } = await github.rest.issues.get({
+              owner, repo, issue_number: auditIssueNumber,
+            });
+
+            const body = auditIssue.body || '';
+
+            // Parse Feature issue reference from footer: "**Feature**: #N"
+            const featureMatch = body.match(/\*\*Feature\*\*[:\s]+#(\d+)/i);
+            if (!featureMatch) {
+              core.info('No Feature reference found in closed issue body; not an agentic-flow audit task. Skipping.');
+              core.setOutput('skip', 'true');
+              return;
+            }
+
+            core.setOutput('skip', 'false');
+            core.setOutput('feature_issue_number', featureMatch[1]);
+
+      - name: Find feature PR and remaining audit tasks
+        id: context
+        if: steps.parse.outputs.skip != 'true'
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const owner              = context.repo.owner;
+            const repo               = context.repo.repo;
+            const featureIssueNumber = Number('${{ steps.parse.outputs.feature_issue_number }}');
+
+            // Get sub-issues for feature issue
+            let subIssues = [];
+            try {
+              const { data } = await github.request(
+                'GET /repos/{owner}/{repo}/issues/{issue_number}/sub_issues',
+                { owner, repo, issue_number: featureIssueNumber }
+              );
+              subIssues = data || [];
+            } catch (e) {
+              core.setFailed(`Could not fetch sub-issues: ${e.message}`);
+              return;
+            }
+
+            const openAuditTasks = subIssues.filter(si =>
+              si.labels?.some(l => l.name === 'agentic-flow-audit') && si.state === 'open'
+            );
+
+            // Parse feature PR number and spec directory from feature issue comments
+            let featurePRNumber = '';
+            let specDirectory   = '';
+            let featureBranch   = '';
+
+            let page = 1;
+            outer: while (true) {
+              const { data: comments } = await github.rest.issues.listComments({
+                owner, repo, issue_number: featureIssueNumber, per_page: 100, page,
+              });
+              if (comments.length === 0) break;
+              for (const c of [...comments].reverse()) {
+                const b = c.body || '';
+                // Only trust comments from bot accounts
+                const authorLogin = c.user?.login || '';
+                if (!authorLogin.endsWith('[bot]')) continue;
+                // Prefer structured base64url context marker (avoids fragile text scraping)
+                const markerMatch = b.match(/<!-- agentic-flow-impl-context:([A-Za-z0-9_=-]+) -->/);
+                if (markerMatch) {
+                  try {
+                    const decoded = JSON.parse(Buffer.from(markerMatch[1], 'base64url').toString('utf8'));
+                    if (decoded.featurePRNumber && decoded.specDirectory) {
+                      featurePRNumber = String(decoded.featurePRNumber);
+                      specDirectory   = decoded.specDirectory;
+                      featureBranch   = decoded.featureBranch || `implement/${decoded.specDirectory.replace(/^specs\//, '')}`;
+                      break outer;
+                    }
+                  } catch {}
+                }
+                // Fall back to text parsing (backward compatibility)
+                if (b.includes('Implementation Started') && b.includes('Feature PR:')) {
+                  const prMatch   = b.match(/\*\*Feature PR:\*\*\s*#(\d+)/);
+                  const specMatch = b.match(/\*\*Spec directory:\*\*\s*`([^`]+)`/);
+                  if (prMatch && specMatch) {
+                    featurePRNumber = prMatch[1];
+                    specDirectory   = specMatch[1];
+                    const suffix    = specDirectory.replace(/^specs\//, '');
+                    featureBranch   = `implement/${suffix}`;
+                    break outer;
+                  }
+                }
+              }
+              page++;
+            }
+
+            if (!featurePRNumber) {
+              core.setFailed('Could not find Implementation Started comment with Feature PR on feature issue. Cannot chain audit.');
+              return;
+            }
+
+            // Guard against manual issue closes: verify the audit agent posted an APPROVE
+            // context block specifically for THIS audit task (not a prior audit)
+            const closedAuditNumber = context.issue.number;
+            const { data: prComments } = await github.rest.issues.listComments({
+              owner, repo, issue_number: Number(featurePRNumber), per_page: 100,
+            });
+            const auditApproved = prComments.some(c => {
+              const body = c.body || '';
+              return body.includes('agentic-flow-context') &&
+                     body.includes(`Audit task issue: #${closedAuditNumber}`) &&
+                     body.includes('Audit result: APPROVE');
+            });
+            if (!auditApproved) {
+              core.info(`No agentic-flow audit APPROVE context block found for audit issue #${closedAuditNumber} on feature PR #${featurePRNumber}. Skipping chain advancement.`);
+              core.setOutput('skip_chain', 'true');
+              return;
+            }
+
+            core.setOutput('skip_chain', 'false');
+
+            core.setOutput('feature_pr_number',      featurePRNumber);
+            core.setOutput('feature_branch',         featureBranch);
+            core.setOutput('spec_directory',         specDirectory);
+            core.setOutput('open_audit_count',       String(openAuditTasks.length));
+            core.setOutput('next_audit_issue_number', openAuditTasks.length > 0 ? String(openAuditTasks[0].number) : '');
+
+      - name: Dispatch next audit task
+        if: steps.parse.outputs.skip != 'true' && steps.context.outputs.skip_chain != 'true' && steps.context.outputs.open_audit_count != '0'
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const owner                  = context.repo.owner;
+            const repo                   = context.repo.repo;
+            const featureIssueNumber     = '${{ steps.parse.outputs.feature_issue_number }}';
+            const featurePRNumber        = '${{ steps.context.outputs.feature_pr_number }}';
+            const featureBranch          = '${{ steps.context.outputs.feature_branch }}';
+            const specDirectory          = '${{ steps.context.outputs.spec_directory }}';
+            const nextAuditIssueNumber   = '${{ steps.context.outputs.next_audit_issue_number }}';
+
+            core.info(`Dispatching audit for next open audit task #${nextAuditIssueNumber}.`);
+            await github.rest.actions.createWorkflowDispatch({
+              owner, repo,
+              workflow_id: 'audit-dispatch.yml',
+              ref: 'main',
+              inputs: {
+                feature_issue_number:     featureIssueNumber,
+                feature_pr_number:        featurePRNumber,
+                feature_branch:           featureBranch,
+                audit_task_issue_number:  nextAuditIssueNumber,
+                spec_directory:           specDirectory,
+                first_audit:              'false',
+              },
+            });
+
+      - name: Dispatch review stage
+        if: steps.parse.outputs.skip != 'true' && steps.context.outputs.skip_chain != 'true' && steps.context.outputs.open_audit_count == '0'
+        uses: actions/github-script@v9
+        with:
+          github-token: ${{ secrets.GH_AW_AGENT_TOKEN }}
+          script: |
+            const owner              = context.repo.owner;
+            const repo               = context.repo.repo;
+            const featureIssueNumber = '${{ steps.parse.outputs.feature_issue_number }}';
+            const featurePRNumber    = '${{ steps.context.outputs.feature_pr_number }}';
+            const featureBranch      = '${{ steps.context.outputs.feature_branch }}';
+            const specDirectory      = '${{ steps.context.outputs.spec_directory }}';
+
+            core.info(`All audits complete. Dispatching review stage for feature PR #${featurePRNumber}.`);
+
+            await github.rest.actions.createWorkflowDispatch({
+              owner, repo,
+              workflow_id: 'review-dispatch.yml',
+              ref: 'main',
+              inputs: {
+                feature_issue_number: featureIssueNumber,
+                feature_pr_number:    featurePRNumber,
+                feature_branch:       featureBranch,
+                spec_directory:       specDirectory,
+              },
+            });

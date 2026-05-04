@@ -13,6 +13,10 @@ This file defines **framework-wide invariants only**. Do not use it for phase-sp
 | Plan | `/approve-spec` on spec PR | `plan.md` → `agentic-flow-plan` | Plan-stage files on the same branch |
 | Tasks | `/approve-plan` on spec PR | `tasks.md` → `agentic-flow-tasks` | Tasks-stage files on the same branch |
 | Post-merge | Spec PR merged | `post-merge-trigger.yml` → `post-merge.md` | Task sub-issues created |
+| Implementation | `tasks-created` label on Feature issue | `implement-trigger.yml` → `implement-dispatch.yml` → `agentic-flow-implement` | Code changes on task branches; auto-merged into feature branch |
+| Audit | All implementation tasks done | `audit-dispatch.yml` → `agentic-flow-audit` | PR review (APPROVE/REQUEST_CHANGES) on feature PR; audit task issues closed |
+| Review | All audits complete | `audit-chain-trigger.yml` → `review-dispatch.yml` → `agentic-flow-review` | Four-category cross-cutting check; APPROVE un-drafts feature PR or REQUEST_CHANGES triggers fix loop |
+| Merge | Human | Human reviews feature PR + merges | Feature changes land on `main` |
 
 ## Framework Rules
 
@@ -23,6 +27,7 @@ This file defines **framework-wide invariants only**. Do not use it for phase-sp
 - **PR-first communication.** Wrapper-agent summaries, failures, and next-step instructions belong on the spec PR, not the Feature Issue.
 - **Append-only collaboration.** Triage may reformat the Feature Issue once. Research may append `## Research Findings` once. After that, agent communication is comment-only.
 - **Stage-scoped writes.** Only create or update files that belong to the active stage. The wrapper agent defines the exact allowed artefacts.
+- **Task-branch-scoped writes.** `agentic-flow-implement` must only commit to its assigned task branch via `create_or_update_file`. It must never modify the feature branch directly, create new branches, or merge PRs.
 - **Explicit handoff.** Every wrapper summary or recovery comment must state the next slash command or manual reviewer step.
 
 ## Labels
@@ -37,6 +42,11 @@ This file defines **framework-wide invariants only**. Do not use it for phase-sp
 | `tasks-created` | All task sub-issues created — pipeline complete (terminal state) |
 | `agentic-flow-task` | Applied to every task sub-issue created by the post-merge workflow |
 | `agentic-flow-audit` | Applied to audit/review task sub-issues (title starts with Audit, Review, Verify, or Validate) |
+| `implementing` | Feature issue: implementation phase is in progress |
+| `implementation-complete` | Feature issue: all implementation tasks merged; audit/review phase |
+| `agentic-flow-task-pr` | Applied to task PRs targeting the feature implementation branch |
+| `agentic-flow-review-fix-pr` | Applied to review-fix PRs; prevents implement-merge.yml from advancing the audit chain |
+| `ready-to-merge-task` | Agent signals task PR is complete — triggers auto-merge by `implement-merge.yml` |
 
 ## Wrapper Ownership
 
@@ -45,3 +55,6 @@ This file defines **framework-wide invariants only**. Do not use it for phase-sp
 | `agentic-flow-spec` | Spec generation/refinement using speckit spec + clarify + analyze |
 | `agentic-flow-plan` | Plan generation using speckit plan + analyze |
 | `agentic-flow-tasks` | Tasks generation using speckit tasks + analyze + checklist |
+| `agentic-flow-implement` | Code implementation on the assigned task branch using task issue context + spec artifacts |
+| `agentic-flow-audit` | Code review and validation on the feature PR using audit task issue context |
+| `agentic-flow-review` | Four-category cross-cutting review on the feature PR (security, architecture, acceptance criteria, coverage) |
