@@ -24,20 +24,35 @@ jobs:
           # Validate specific required agent and workflow files
           # Note: .lock.yml files are not shipped — users compile them after installation
           for f in \
-            "src/.github/workflows/triage.md" \
-            "src/.github/workflows/research.md" \
-            "src/.github/workflows/spec.md" \
-            "src/.github/workflows/plan.md" \
-            "src/.github/workflows/tasks.md" \
-            "src/.github/workflows/refine.md" \
             "src/.github/actions/assign-pr-agent/action.yml" \
-            "src/.github/agents/agentic-flow-spec.agent.md" \
+            "src/.github/actions/assign-pr-agent/main.js" \
+            "src/.github/agents/agentic-flow-audit.agent.md" \
+            "src/.github/agents/agentic-flow-implement.agent.md" \
             "src/.github/agents/agentic-flow-plan.agent.md" \
+            "src/.github/agents/agentic-flow-review.agent.md" \
+            "src/.github/agents/agentic-flow-spec.agent.md" \
             "src/.github/agents/agentic-flow-tasks.agent.md" \
-            "src/.github/workflows/triage-trigger.yml" \
+            "src/.github/workflows/audit-chain-trigger.yml" \
+            "src/.github/workflows/audit-dispatch.yml" \
+            "src/.github/workflows/copilot-setup-steps.yml" \
+            "src/.github/workflows/implement-dispatch.yml" \
+            "src/.github/workflows/implement-merge.yml" \
+            "src/.github/workflows/implement-trigger.yml" \
+            "src/.github/workflows/plan.md" \
             "src/.github/workflows/post-merge-trigger.yml" \
             "src/.github/workflows/post-merge.md" \
-            "src/.github/workflows/research-trigger.yml"; do
+            "src/.github/workflows/refine.md" \
+            "src/.github/workflows/rerun-audit-trigger.yml" \
+            "src/.github/workflows/research-trigger.yml" \
+            "src/.github/workflows/research.md" \
+            "src/.github/workflows/review-dispatch.yml" \
+            "src/.github/workflows/review-fix-complete-trigger.yml" \
+            "src/.github/workflows/review-fix-dispatch.yml" \
+            "src/.github/workflows/review-result-trigger.yml" \
+            "src/.github/workflows/spec.md" \
+            "src/.github/workflows/tasks.md" \
+            "src/.github/workflows/triage-trigger.yml" \
+            "src/.github/workflows/triage.md"; do
             [ -f "$f" ] || { echo "MISSING: $f"; exit 1; }
           done
 
