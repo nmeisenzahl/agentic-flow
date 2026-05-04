@@ -58,7 +58,7 @@ runs:
   steps:
     - name: Assign Copilot to spec PR
       id: assign
-      uses: actions/github-script@v8
+      uses: actions/github-script@v9
       env:
         GH_AW_AGENT_TOKEN: ${{ inputs.agent-token }}
         STAGE_NAME: ${{ inputs.stage-name }}

@@ -31,14 +31,14 @@ jobs:
       issues: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           token: ${{ secrets.GH_AW_AGENT_TOKEN }}
           fetch-depth: 0
 
       - name: Guard — verify feature PR is open and no active review-fix PR exists
         id: guard
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           github-token: ${{ secrets.GH_AW_AGENT_TOKEN }}
           script: |
@@ -93,7 +93,7 @@ jobs:
       - name: Find latest review findings comment
         id: findings
         if: steps.guard.outputs.skip != 'true'
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           github-token: ${{ secrets.GH_AW_AGENT_TOKEN }}
           script: |
@@ -122,7 +122,7 @@ jobs:
       - name: Open review-fix PR and assign implement agent
         id: open-pr
         if: steps.guard.outputs.skip != 'true'
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           github-token: ${{ secrets.GH_AW_AGENT_TOKEN }}
           script: |

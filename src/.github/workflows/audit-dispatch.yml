@@ -39,11 +39,11 @@ jobs:
       issues: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Validate audit task and un-draft feature PR
         id: prep
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           github-token: ${{ secrets.GH_AW_AGENT_TOKEN }}
           script: |

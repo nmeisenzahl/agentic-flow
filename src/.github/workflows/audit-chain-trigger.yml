@@ -20,7 +20,7 @@ jobs:
     steps:
       - name: Parse feature issue from closed audit issue
         id: parse
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const owner = context.repo.owner;
@@ -47,7 +47,7 @@ jobs:
       - name: Find feature PR and remaining audit tasks
         id: context
         if: steps.parse.outputs.skip != 'true'
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const owner              = context.repo.owner;
@@ -149,7 +149,7 @@ jobs:
 
       - name: Dispatch next audit task
         if: steps.parse.outputs.skip != 'true' && steps.context.outputs.skip_chain != 'true' && steps.context.outputs.open_audit_count != '0'
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const owner                  = context.repo.owner;
@@ -177,7 +177,7 @@ jobs:
 
       - name: Dispatch review stage
         if: steps.parse.outputs.skip != 'true' && steps.context.outputs.skip_chain != 'true' && steps.context.outputs.open_audit_count == '0'
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           github-token: ${{ secrets.GH_AW_AGENT_TOKEN }}
           script: |

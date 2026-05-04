@@ -32,7 +32,7 @@ safe-outputs:
           type: string
       steps:
         - name: Create branch, draft PR, and assign agentic-flow-spec
-          uses: actions/github-script@v8
+          uses: actions/github-script@v9
           env:
             GH_AW_AGENT_TOKEN: ${{ secrets.GH_AW_AGENT_TOKEN }}
           with:

@@ -21,7 +21,7 @@ jobs:
     steps:
       - name: Resolve feature context from feature PR
         id: context
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const owner      = context.repo.owner;
@@ -60,7 +60,7 @@ jobs:
 
       - name: Find first open audit task
         id: find-audit
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const owner              = context.repo.owner;
@@ -97,7 +97,7 @@ jobs:
             core.setOutput('audit_task_issue_number', String(openAuditTasks[0].number));
 
       - name: Dispatch audit
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const owner                  = context.repo.owner;

@@ -32,7 +32,7 @@ jobs:
       actions: write
     steps:
       - name: Ensure implementation labels exist
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const labels = [
@@ -51,7 +51,7 @@ jobs:
 
       - name: Parse implement-ready context from feature issue
         id: context
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const owner = context.repo.owner;
@@ -96,7 +96,7 @@ jobs:
             core.setOutput('branch_suffix',  branchSuffix);
 
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
           token: ${{ secrets.GH_AW_AGENT_TOKEN }}
@@ -117,7 +117,7 @@ jobs:
 
       - name: Open draft feature PR
         id: create-pr
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const owner         = context.repo.owner;
@@ -160,7 +160,7 @@ jobs:
             core.setOutput('pr_number', String(pr.number));
 
       - name: Apply implementing label to feature issue
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             await github.rest.issues.addLabels({
@@ -172,7 +172,7 @@ jobs:
 
       - name: Post implementation started comment
         id: post-started
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const owner         = context.repo.owner;
@@ -227,7 +227,7 @@ jobs:
             });
 
       - name: Find first ready task and dispatch
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const owner         = context.repo.owner;

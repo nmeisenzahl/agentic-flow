@@ -32,11 +32,11 @@ jobs:
       issues: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Validate feature PR and check idempotency
         id: validate
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           github-token: ${{ secrets.GH_AW_AGENT_TOKEN }}
           script: |

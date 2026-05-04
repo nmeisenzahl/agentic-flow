@@ -30,7 +30,7 @@ jobs:
     steps:
       - name: Resolve task PR and verify eligibility
         id: resolve
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           github-token: ${{ github.token }}
           script: |
@@ -189,7 +189,7 @@ jobs:
       - name: Merge task PR into feature branch
         id: merge
         if: steps.resolve.outputs.skip != 'true'
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           github-token: ${{ secrets.GH_AW_AGENT_TOKEN }}
           script: |
@@ -260,7 +260,7 @@ jobs:
 
       - name: Close task issue with summary
         if: steps.resolve.outputs.skip != 'true' && steps.merge.outputs.merged == 'true' && !contains(steps.resolve.outputs.task_pr_labels, 'agentic-flow-review-fix-pr')
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const owner           = context.repo.owner;
@@ -289,7 +289,7 @@ jobs:
 
       - name: Update feature issue progress
         if: steps.resolve.outputs.skip != 'true' && steps.merge.outputs.merged == 'true'
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const owner              = context.repo.owner;
@@ -311,7 +311,7 @@ jobs:
 
       - name: Find next task or dispatch audit
         if: steps.resolve.outputs.skip != 'true' && steps.merge.outputs.merged == 'true' && !contains(steps.resolve.outputs.task_pr_labels, 'agentic-flow-review-fix-pr')
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const owner              = context.repo.owner;
