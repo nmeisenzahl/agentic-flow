@@ -62,6 +62,8 @@ jobs:
           done
 
       - name: Validate shipped workflow sources compile
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           gh extension install github/gh-agentic-workflows
           gh aw compile --actionlint src/.github/workflows/*.md
