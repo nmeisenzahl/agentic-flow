@@ -111,39 +111,57 @@ jobs:
               return;
             }
 
-            // Verify no check runs with failure/error/action_required on the head commit.
+            // Use a pass allowlist (not a failure denylist) to correctly handle pending/in-progress
+            // checks — don't merge until ALL relevant checks have completed successfully.
+            // Filter out this workflow's own check suite to avoid self-blocking.
+            // The check run job name ('merge-task-pr') differs from the workflow name,
+            // so we use the check_suite_id to reliably identify and exclude our own run.
             const headSha = pr.head.sha;
+            const { data: runData } = await github.rest.actions.getWorkflowRun({
+              owner, repo, run_id: context.runId,
+            });
+            const ownCheckSuiteId = runData.check_suite_id;
             const { data: checkRuns } = await github.rest.checks.listForRef({
               owner, repo, ref: headSha, per_page: 100,
             });
-            const failedChecks = checkRuns.check_runs.filter(c =>
-              c.status === 'completed' &&
-              ['failure', 'action_required', 'timed_out'].includes(c.conclusion)
+            const relevantChecks = checkRuns.check_runs.filter(c =>
+              !c.check_suite || c.check_suite.id !== ownCheckSuiteId
             );
-            if (failedChecks.length > 0) {
-              const ciFailMarker = `<!-- agentic-flow-ci-fail:${headSha} -->`;
-              const { data: existingComments } = await github.rest.issues.listComments({
-                owner, repo, issue_number: taskPRNumber, per_page: 100,
-              });
-              if (!existingComments.some(c => (c.body || '').includes(ciFailMarker))) {
-                const failList = failedChecks.map(c => `- ${c.name}: ${c.conclusion}`).join('\n');
-                await github.rest.issues.createComment({
-                  owner, repo, issue_number: taskPRNumber,
-                  body: [
-                    ciFailMarker,
-                    '## ❌ Task PR — CI Failed',
-                    '',
-                    'The following checks failed on this task PR. Auto-merge is blocked.',
-                    '',
-                    failList,
-                    '',
-                    '_agentic-flow implementation pipeline_',
-                  ].join('\n'),
-                });
+            if (relevantChecks.length > 0) {
+              const pendingChecks = relevantChecks.filter(c => c.status !== 'completed');
+              if (pendingChecks.length > 0) {
+                core.info(`Checks still pending (${pendingChecks.map(c => c.name).join(', ')}); waiting for CI completion.`);
+                core.setOutput('skip', 'true');
+                return;
               }
-              core.setOutput('skip', 'true');
-              return;
+              const passConclusions = new Set(['success', 'neutral', 'skipped']);
+              const failedChecks = relevantChecks.filter(c => !passConclusions.has(c.conclusion));
+              if (failedChecks.length > 0) {
+                const ciFailMarker = `<!-- agentic-flow-ci-fail:${headSha} -->`;
+                const { data: existingComments } = await github.rest.issues.listComments({
+                  owner, repo, issue_number: taskPRNumber, per_page: 100,
+                });
+                if (!existingComments.some(c => (c.body || '').includes(ciFailMarker))) {
+                  const failList = failedChecks.map(c => `- ${c.name}: ${c.conclusion}`).join('\n');
+                  await github.rest.issues.createComment({
+                    owner, repo, issue_number: taskPRNumber,
+                    body: [
+                      ciFailMarker,
+                      '## ❌ Task PR — CI Failed',
+                      '',
+                      'The following checks failed on this task PR. Auto-merge is blocked.',
+                      '',
+                      failList,
+                      '',
+                      '_agentic-flow implementation pipeline_',
+                    ].join('\n'),
+                  });
+                }
+                core.setOutput('skip', 'true');
+                return;
+              }
             }
+            // Zero relevant checks (no CI configured) OR all checks passed → proceed with merge
 
             // Extract context from PR body
             const body = pr.body || '';
@@ -182,6 +200,43 @@ jobs:
             // Idempotency: another concurrent run may have already merged this PR
             if (pr.state !== 'open') {
               core.info(`PR #${taskPRNumber} is already ${pr.state}; skipping merge.`);
+              core.setOutput('merged', 'false');
+              return;
+            }
+
+            // Guard against zero-diff task PRs (Copilot failed to commit anything)
+            const { data: prFiles } = await github.rest.pulls.listFiles({
+              owner, repo, pull_number: taskPRNumber, per_page: 1,
+            });
+            if (prFiles.length === 0) {
+              const taskIssueNum = Number('${{ steps.resolve.outputs.task_issue_number }}');
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: taskPRNumber,
+                body: [
+                  `<!-- agentic-flow-zero-diff:${pr.head.sha} -->`,
+                  '## ⚠️ Task PR — No Changes',
+                  '',
+                  'This task PR has no file changes. The task will be closed as superseded.',
+                  '',
+                  '_To retry, re-dispatch `implement-dispatch.yml` for this task._',
+                  '',
+                  '_agentic-flow implementation pipeline_',
+                ].join('\n'),
+              });
+              await github.rest.pulls.update({ owner, repo, pull_number: taskPRNumber, state: 'closed' });
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: taskIssueNum,
+                body: [
+                  '## ⚠️ Task Superseded — No Changes',
+                  '',
+                  `Task PR #${taskPRNumber} contained no file changes and was closed.`,
+                  '',
+                  '_To retry: re-dispatch `implement-dispatch.yml` for this task._',
+                  '',
+                  '_agentic-flow implementation pipeline_',
+                ].join('\n'),
+              });
+              await github.rest.issues.update({ owner, repo, issue_number: taskIssueNum, state: 'closed' });
               core.setOutput('merged', 'false');
               return;
             }

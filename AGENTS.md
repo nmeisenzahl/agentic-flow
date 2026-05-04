@@ -115,6 +115,7 @@ developed using spec-kit locally via the specify slash commands.
 | Implementation and audit dispatch workflows use standard GHA YAML | Unlike `spec.md`, `plan.md`, etc., the implementation/audit orchestration is pure GHA JavaScript — no `gh aw` agentic workflow needed. The agent assignment step still uses the `assign-pr-agent` composite action for consistency. |
 | No automatic reconciliation for partial-success pipeline failures | If a task PR merges but a downstream step (close issue, dispatch next) fails, the pipeline stalls. Recovery is manual: inspect feature issue sub-issues and re-run the failed workflow. A dedicated reconciliation workflow is a planned future enhancement. |
 | No watchdog for silent agent timeouts | If an agent session fails to apply `ready-to-merge-task` or close an audit issue, the pipeline hangs. Manual recovery via `/rerun-audit` (audit) or workflow re-run (implementation). Scheduled timeout detection is a planned future enhancement. |
+| `mergeable` + check-runs vs `mergeStateStatus` UNSTABLE | `mergeStateStatus` is set to `UNSTABLE` by GitHub when legacy Commit Status API returns `pending` with zero entries — common in repos with no CI. `implement-merge.yml` uses `mergeable` (GraphQL) + explicit check-run listing instead, bypassing the false UNSTABLE state. Pass allowlist (`success\|neutral\|skipped`) instead of failure denylist correctly handles all-pending and in-progress states. |
 
 ---
 

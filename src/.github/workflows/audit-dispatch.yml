@@ -9,6 +9,10 @@ on:
       feature_pr_number:
         description: 'Feature PR number'
         required: true
+      feature_branch:
+        description: 'Feature branch name (e.g. implement/001-my-feature)'
+        required: false
+        default: ''
       audit_task_issue_number:
         description: 'Audit task issue number'
         required: true

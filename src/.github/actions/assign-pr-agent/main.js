@@ -443,27 +443,45 @@ const replaceActors = async ({ actorIds, customAgent = null, customInstructions:
 
 // ── addAssignees → post-comment → removeAssignees sequence ──────────
 if (copilotAlreadyAssigned) {
-  core.info(`Copilot is already assigned to PR #${itemPullNumber}; forcing a fresh reassignment for the ${stageName} wrapper.`);
-  await replaceActors({
-    actorIds: (await getCurrentAssigneeIds()).filter(id => id !== agent.id),
-  });
-  await waitForCopilotUnassignment({ timeoutMs: 30000 });
+  if (stageName === 'implement') {
+    // Implement: skip entirely — Copilot is actively coding; don't interrupt.
+    core.info(`Copilot is already assigned to PR #${itemPullNumber} for ${stageName} stage; skipping to avoid interrupting the ongoing session.`);
+    core.setOutput('startup-comment-id', '');
+    return;
+  }
+  if (stageName === 'audit') {
+    // Audit: Copilot may already be assigned from a prior audit task on the same PR.
+    // Don't re-assign (that would interrupt any ongoing session), but DO post the
+    // startup comment so Copilot gets the new audit task context.
+    core.info(`Copilot is already assigned to PR #${itemPullNumber} for ${stageName} stage; posting startup comment without re-assigning.`);
+    // Fall through to the startup comment step below.
+  } else {
+    // spec/plan/tasks: force fresh reassignment (new command = new session).
+    core.info(`Copilot is already assigned to PR #${itemPullNumber}; forcing a fresh reassignment for the ${stageName} wrapper.`);
+    await replaceActors({
+      actorIds: (await getCurrentAssigneeIds()).filter(id => id !== agent.id),
+    });
+    await waitForCopilotUnassignment({ timeoutMs: 30000 });
+  }
 }
 
 // Work around the upstream gh aw PR-target assignment bug by performing the PR
 // reassignment directly. Also force a fresh reassignment when Copilot is already
 // present and forward the exact startup comment body through customInstructions
 // so the new session starts with explicit stage-specific context.
-const actorIds = [agent.id, ...(await getCurrentAssigneeIds()).filter(id => id !== agent.id)];
-await replaceActors({
-  actorIds,
-  customAgent: agentName,
-  customInstructions,
-  baseRef: baseRefName,
-});
-
-await waitForCopilotAssignment({ timeoutMs: 30000 });
-await sleep(5000);
+// Skip replaceActors for the audit stage when Copilot is already assigned —
+// we only need the startup comment in that case (assignment was handled previously).
+if (!(copilotAlreadyAssigned && stageName === 'audit')) {
+  const actorIds = [agent.id, ...(await getCurrentAssigneeIds()).filter(id => id !== agent.id)];
+  await replaceActors({
+    actorIds,
+    customAgent: agentName,
+    customInstructions,
+    baseRef: baseRefName,
+  });
+  await waitForCopilotAssignment({ timeoutMs: 30000 });
+  await sleep(5000);
+}
 
 const triggerComment = await github.rest.issues.createComment({
   owner,

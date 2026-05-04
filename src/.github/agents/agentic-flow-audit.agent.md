@@ -91,12 +91,11 @@ The block provides:
 
 8. **Close audit task issue (APPROVE path only)**: If your review result is `APPROVE`, call `issue_write` with `method: "update"`, `state: "closed"` on the audit task issue number. This triggers `audit-chain-trigger.yml` to dispatch the next audit task (or mark the feature PR ready for merge). If your result is `REQUEST_CHANGES`, do **not** close the issue — leave it open so the human can fix the code and re-trigger the audit via `/rerun-audit`.
 
-9. **Post handoff comment**: Post `<!-- agentic-flow-context Phase: audit ... -->` on the **feature PR** (see **Feature PR Comment Format** below).
+9. **Post handoff comment** (**MANDATORY — do not skip**): Call `create_issue_comment` on the **feature PR** with the exact format shown in **Feature PR Comment Format** below. The comment MUST begin with an HTML block comment `<!-- agentic-flow-context ... -->` containing `Audit task issue: #M` and `Audit result: APPROVE` (or `REQUEST_CHANGES`). This marker is machine-parsed by `audit-chain-trigger.yml` to advance the pipeline. A plain-text summary alone is NOT sufficient.
 
 10. **Run the Completion Gate** before returning any conversational reply.
 
-> [!IMPORTANT]
-> **Step 10 is mandatory.** Do not return a reply until the Completion Gate passes.
+**Both step 9 and step 10 are mandatory. Do not return any conversational reply until both complete successfully.**
 
 ## Completion Gate
 
@@ -124,6 +123,16 @@ Run both gates in order. Exit in failure state on any gate failure.
 1. Confirm the `create_pull_request_review` call returned a review ID.
 2. If the review call failed: retry once.
 3. If still failing: post an error comment on the feature PR and exit in **failure** state.
+
+### Gate C — Handoff context block posted on feature PR
+
+1. Call `list_issue_comments` (or equivalent) on the **feature PR** and search recent comments for one that contains all three of:
+   - `agentic-flow-context`
+   - `Audit task issue: #M` (where M is this audit task's issue number)
+   - `Audit result: APPROVE` (or `REQUEST_CHANGES` on that path)
+2. If such a comment is found: gate passes.
+3. If NOT found: the step 9 comment was not posted. Call `create_issue_comment` on the feature PR now with the correct format, then re-verify.
+4. If still missing: post an error comment and exit in **failure** state.
 
 ## Feature PR Comment Format
 

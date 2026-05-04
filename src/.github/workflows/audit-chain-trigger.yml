@@ -87,6 +87,20 @@ jobs:
                 // Only trust comments from bot accounts
                 const authorLogin = c.user?.login || '';
                 if (!authorLogin.endsWith('[bot]')) continue;
+                // Prefer structured base64url context marker (avoids fragile text scraping)
+                const markerMatch = b.match(/<!-- agentic-flow-impl-context:([A-Za-z0-9_=-]+) -->/);
+                if (markerMatch) {
+                  try {
+                    const decoded = JSON.parse(Buffer.from(markerMatch[1], 'base64url').toString('utf8'));
+                    if (decoded.featurePRNumber && decoded.specDirectory) {
+                      featurePRNumber = String(decoded.featurePRNumber);
+                      specDirectory   = decoded.specDirectory;
+                      featureBranch   = decoded.featureBranch || `implement/${decoded.specDirectory.replace(/^specs\//, '')}`;
+                      break outer;
+                    }
+                  } catch {}
+                }
+                // Fall back to text parsing (backward compatibility)
                 if (b.includes('Implementation Started') && b.includes('Feature PR:')) {
                   const prMatch   = b.match(/\*\*Feature PR:\*\*\s*#(\d+)/);
                   const specMatch = b.match(/\*\*Spec directory:\*\*\s*`([^`]+)`/);

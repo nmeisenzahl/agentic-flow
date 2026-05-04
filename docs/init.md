@@ -140,7 +140,7 @@ The `GITHUB_TOKEN` used by workflows needs the following scopes at runtime (set 
 
 ### GH_AW_AGENT_TOKEN
 
-`GH_AW_AGENT_TOKEN` is a fine-grained PAT required by the custom PR assignment workaround used in `plan.md`, `refine.md`, and `tasks.md`. Those workflows use it to reassign Copilot on the spec PR and post the startup `@copilot` comment that launches the wrapper agent. The `/start-spec` flow continues to use the built-in sub-issue assignment path. Without this secret, the PR-based wrapper handoff cannot launch.
+`GH_AW_AGENT_TOKEN` is a fine-grained PAT required by the custom PR assignment workaround used in `plan.md`, `refine.md`, `tasks.md`, `implement-dispatch.yml`, `audit-dispatch.yml`, `audit-chain-trigger.yml`, and `rerun-audit-trigger.yml`. Those workflows use it to reassign Copilot on the spec PR and post the startup `@copilot` comment that launches the wrapper agent. The `/start-spec` flow continues to use the built-in sub-issue assignment path. Without this secret, the PR-based wrapper handoff cannot launch.
 
 This same token is also used as the underlying PAT for `COPILOT_MCP_GITHUB_WRITE_TOKEN` (see §5b).
 
@@ -202,7 +202,7 @@ The framework ships `copilot-setup-steps.yml` in `.github/workflows/`. This work
 On the `main` branch (Settings → Branches → Add rule):
 
 - **Require a pull request before merging:** enabled
-  - Require approvals: 0 (auto-merge handles this via labels + CI)
+  - Require approvals: 0 for the feature branch (task PRs are auto-merged by the pipeline; the feature PR requires human approval before merging to `main`)
 - **Require status checks to pass:** enabled
   - Add your CI check names once they exist
 - **Require branches to be up to date:** enabled

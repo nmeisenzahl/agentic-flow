@@ -171,6 +171,7 @@ jobs:
             });
 
       - name: Post implementation started comment
+        id: post-started
         uses: actions/github-script@v8
         with:
           script: |
@@ -190,6 +191,7 @@ jobs:
             } catch (e) {
               core.warning(`Could not fetch sub-issues: ${e.message}`);
             }
+            core.setOutput('sub_issues_json', JSON.stringify(subIssues));
 
             const implTasks  = subIssues.filter(si => si.labels?.some(l => l.name === 'agentic-flow-task') && !si.labels?.some(l => l.name === 'agentic-flow-audit'));
             const auditTasks = subIssues.filter(si => si.labels?.some(l => l.name === 'agentic-flow-audit'));
@@ -197,9 +199,18 @@ jobs:
             const taskList  = implTasks.map(i  => `- [ ] #${i.number}: ${i.title}`).join('\n') || '_No implementation tasks found_';
             const auditList = auditTasks.map(i => `- [ ] #${i.number}: ${i.title}`).join('\n');
 
+            // Encode structured context for reliable machine parsing downstream
+            const ctxPayload = Buffer.from(JSON.stringify({
+              featureIssueNumber: issueNumber,
+              featurePRNumber: Number(featurePR),
+              specDirectory: specDirectory,
+              featureBranch: '${{ steps.context.outputs.feature_branch }}',
+            })).toString('base64url');
+
             const lines = [
               '## 🚀 Implementation Started',
               '',
+              `<!-- agentic-flow-impl-context:${ctxPayload} -->`,
               `**Feature PR:** #${featurePR}`,
               `**Spec directory:** \`${specDirectory}\``,
               '',
@@ -226,15 +237,13 @@ jobs:
             const featureBranch = '${{ steps.context.outputs.feature_branch }}';
             const specDirectory = '${{ steps.context.outputs.spec_directory }}';
 
+            // Re-use sub-issues fetched in the post-started step (avoids duplicate API call)
             let subIssues = [];
             try {
-              const { data } = await github.request(
-                'GET /repos/{owner}/{repo}/issues/{issue_number}/sub_issues',
-                { owner, repo, issue_number: issueNumber }
-              );
-              subIssues = data || [];
+              const raw = '${{ steps.post-started.outputs.sub_issues_json }}';
+              subIssues = raw ? JSON.parse(raw) : [];
             } catch (e) {
-              core.setFailed(`Could not fetch sub-issues: ${e.message}`);
+              core.setFailed(`Could not parse sub-issues from post-started output: ${e.message}`);
               return;
             }
 

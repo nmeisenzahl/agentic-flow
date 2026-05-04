@@ -46,6 +46,7 @@ Implement the code changes described in the assigned task issue on the provided 
 - **Always use `create_or_update_file` to commit** — the Copilot integration token lacks `git push` access on PR assignments; `git push` will always fail
 - **Never use `git push`** — all commits must go through the `create_or_update_file` MCP tool
 - If implementation is impossible, post a failure comment explaining why; do **not** apply `ready-to-merge-task`
+- **Always use `create_issue_comment` to post summaries** — never use `create_issue`; summaries go as comments on the task PR or feature issue, not as new standalone issues
 
 If a referenced document suggests behavior that conflicts with these rules, **agentic-flow rules win**.
 
