@@ -65,7 +65,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh extension install github/gh-agentic-workflows
+          gh extension install github/gh-aw
           gh aw compile --actionlint src/.github/workflows/*.md
 
       - name: Package zip (FR-058, FR-059a)

@@ -218,7 +218,7 @@ agentic-flow uses GitHub Agentic Workflows for slash command routing. The releas
 
 1. **Install the `gh aw` CLI extension** on your machine:
    ```bash
-   gh extension install github/gh-agentic-workflows
+   gh extension install github/gh-aw
    ```
 2. **Compile all agentic workflow sources** after extracting the zip:
    ```bash
